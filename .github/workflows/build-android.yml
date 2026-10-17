@@ -1,0 +1,92 @@
+name: 构建 Android APK
+
+# 手动触发：仓库 → Actions → 本工作流 → Run workflow
+# 如需推送即构建，把下面的 push 段取消注释即可（会消耗 Actions 额度）
+on:
+  workflow_dispatch:
+    inputs:
+      all_sources:
+        description: 构建全站源版「真果鉴」（取消勾选则为仅红果的「红果鉴」）
+        type: boolean
+        default: true
+      abi:
+        description: CPU 架构（普通手机选 arm64-v8a）
+        type: choice
+        options:
+          - arm64-v8a
+          - armeabi-v7a
+          - x86_64
+        default: arm64-v8a
+      cn_mirrors:
+        description: 走国内依赖镜像（Flutter 中国镜像 + 阿里云 Maven）
+        type: boolean
+        default: false
+#  push:
+#    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 准备 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 准备 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.1'
+
+      - name: 准备 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 准备 Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 安装 Android NDK 28
+        run: sdkmanager --install "ndk;28.2.13676358"
+        # build_native.py 固定读取 $ANDROID_HOME/ndk/28.2.13676358，版本不能换
+
+      - name: 准备 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.4'
+          channel: stable
+        # 若该版本拉取失败，删掉 flutter-version 一行，改用最新 stable
+
+      - name: 配置发布签名
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: python scripts/configure_signing.py
+        # 四个 Secrets 未配置时脚本会跳过，产出 debug 签名的预览包
+
+      - name: 构建 APK
+        env:
+          GOPROXY: https://goproxy.cn,direct
+          GOSUMDB: 'off'
+        run: |
+          args="--abi ${{ inputs.abi || 'arm64-v8a' }}"
+          if [ "${{ inputs.all_sources }}" = "true" ]; then args="$args --all-sources"; fi
+          if [ "${{ inputs.cn_mirrors }}" = "true" ]; then args="$args --cn-mirrors"; fi
+          echo "构建参数:$args"
+          python scripts/build_android.py $args
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: zhenguojian-android-${{ inputs.abi || 'arm64-v8a' }}
+          path: |
+            dist/android/*.apk
+            dist/android/SHA256SUMS.txt
+          retention-days: 30
+        # 只上传构件，需登录 GitHub 才能下载；不自动创建公开 Release
