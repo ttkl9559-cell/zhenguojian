@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -15,11 +16,15 @@ import 'lan_models.dart';
 import 'lan_screen.dart';
 import 'local_store.dart';
 import 'models.dart';
+import 'network_state.dart';
 import 'playback_preferences.dart';
 import 'playback_preloader.dart';
 import 'playback_recovery.dart';
 import 'player_interactions.dart';
 import 'widgets.dart';
+
+/// 全屏横屏分区手势的类型（0.7.2，`XQ-0105`）。
+enum _FsGesture { none, seek, brightness, volume, episode }
 
 /// 首页：竖滑视频流（短视频式沉浸浏览）。
 ///
@@ -43,6 +48,7 @@ class VerticalFeedScreen extends StatefulWidget {
     this.embedded = false,
     this.active = true,
     this.sources = const [],
+    this.hongguoGenres,
     this.playerFactory,
     this.videoBuilder,
     this.refreshSignal,
@@ -117,6 +123,15 @@ class VerticalFeedScreen extends StatefulWidget {
   /// 当前生效的站源集合（由首页传入，随站源切换变化）。
   final List<SourceSite> sources;
 
+  /// 红果推荐流要取的分类（0.7.2，`XQ-0106`）。
+  ///
+  /// null 表示默认三类混合（真人剧 + 漫剧 + AI 剧）。
+  /// 用户选「真人剧」时传 `['short_play']`；选「漫剧」时传
+  /// `['comic_series', 'ai_series']`（漫剧含 AI 剧）。
+  ///
+  /// 这套分类**只有红果支持**，首页只在"单独选中红果"时才传非空值。
+  final List<String>? hongguoGenres;
+
   /// 测试用：注入假播放器，避免依赖原生库。
   @visibleForTesting
   final Player Function()? playerFactory;
@@ -138,6 +153,18 @@ class _VerticalFeedScreenState extends State<VerticalFeedScreen> {
   final _controller = PageController();
   final _focus = FocusNode(debugLabel: 'vertical-feed');
   final _random = math.Random();
+
+  /// 本次会话是否手动点过播放（0.7.3，`XQ-0107`）。
+  ///
+  /// 放在父级是为了**跨页共享**：移动网络下第一页要用户点一下才播；
+  /// 点过之后，后续切集/切部不再拦截（用户明确选"本次继续自动连播"）。
+  final _manualPlayed = ValueNotifier<bool>(false);
+
+  /// 「因自动连播而进入」的目标页索引（0.7.4）。
+  ///
+  /// 播完自动跳下一部时设置；被跳到的页面据此**一开始就静默**（不弹控件）。
+  /// 用户手动切页时置空。
+  int? _autoEnterIndex;
 
   List<Drama> _items = [];
   final _seen = <String>{};
@@ -281,6 +308,12 @@ class _VerticalFeedScreenState extends State<VerticalFeedScreen> {
           : (names.isEmpty ? '' : names.first.name);
       _reset(switchTo: label.isEmpty ? null : label);
     }
+    // 0.7.2（XQ-0106）：剧类筛选变化 → 换一批内容。
+    final oldGenres = (oldWidget.hongguoGenres ?? const <String>[]).join(',');
+    final newGenres = (widget.hongguoGenres ?? const <String>[]).join(',');
+    if (oldGenres != newGenres) {
+      _reset(force: true);
+    }
   }
 
   /// 双击首页标签：换一批新的随机内容。
@@ -299,6 +332,7 @@ class _VerticalFeedScreenState extends State<VerticalFeedScreen> {
     unawaited(widget.repository.cancelFeedCatalog());
     // 预载器释放（0.6.9）：取消挂起请求并释放已预取的会话，避免会话泄漏。
     _preloader.dispose();
+    _manualPlayed.dispose();
     _controller.dispose();
     _focus.dispose();
     super.dispose();
@@ -485,7 +519,7 @@ class _VerticalFeedScreenState extends State<VerticalFeedScreen> {
     var hasMore = false;
     final rows = <List<Drama>>[];
     final results = await Future.wait(
-      _hongguoGenres.map((genre) async {
+      (widget.hongguoGenres ?? _hongguoGenres).map((genre) async {
         if (_closed) return null;
         try {
           return await widget.repository.recommendations(
@@ -699,7 +733,7 @@ class _VerticalFeedScreenState extends State<VerticalFeedScreen> {
     return KeyEventResult.ignored;
   }
 
-  void _jump(int delta) {
+  void _jump(int delta, {bool auto = false}) {
     if (_closed) return;
     final target = _index + delta;
     if (target < 0) return;
@@ -712,6 +746,12 @@ class _VerticalFeedScreenState extends State<VerticalFeedScreen> {
       }
       return;
     }
+    // 0.7.4 修复（真机反馈"全屏连播下一部仍会弹控件"）：
+    // 播完自动跳下一部时，标记"目标页是自动进来的"，新页面据此不弹控件
+    // （与自动切集同一套静默逻辑）。用户手动切页时清掉标记。
+    setState(() {
+      _autoEnterIndex = auto ? target : null;
+    });
     if (_controller.hasClients) {
       _controller.animateToPage(
         target,
@@ -861,12 +901,14 @@ class _VerticalFeedScreenState extends State<VerticalFeedScreen> {
           repository: widget.repository,
           store: widget.store,
           preloader: _preloader,
+          manualPlayed: _manualPlayed,
+          autoEnter: index == _autoEnterIndex,
           active: widget.active && isCurrent,
           autoNextEpisode: _autoNextEpisode,
           playerFactory: widget.playerFactory,
           videoBuilder: widget.videoBuilder,
           onToggleAutoNext: _toggleAutoNext,
-          onFinished: () => _jump(1),
+          onFinished: () => _jump(1, auto: true),
           onOpenDetail: () => _openDetail(drama),
           onEpisodeStateChanged: isCurrent ? _onPageEpisodeStateChanged : null,
           // 单剧模式（0.2.29）：起始集 / 本地文件模式 / 续播位置。
@@ -1092,6 +1134,8 @@ class _FeedPage extends StatefulWidget {
     required this.repository,
     required this.store,
     required this.preloader,
+    required this.manualPlayed,
+    this.autoEnter = false,
     required this.active,
     required this.autoNextEpisode,
     required this.onToggleAutoNext,
@@ -1126,6 +1170,15 @@ class _FeedPage extends StatefulWidget {
   /// `resolve(甲剧1)` —— 预载**白做还被释放**，用户感觉"完全没有预加载"。
   /// 改为由父级创建并传入后，预载结果可跨页复用。
   final PlaybackPreloader preloader;
+
+  /// 本次会话是否手动点过播放（0.7.3，`XQ-0107`，由父级持有、跨页共享）。
+  final ValueNotifier<bool> manualPlayed;
+
+  /// 本页是否由「自动连播」切进来（0.7.4）。
+  ///
+  /// true 时本页一开始就静默（不弹控件），直到用户操作或起播后恢复常态。
+  final bool autoEnter;
+
   final bool active;
 
   /// true = 播完自动播本剧下一集；false = 播完跳到下一部。
@@ -1188,6 +1241,20 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
   bool _ready = false;
   bool _panelOpen = false;
   bool _controlsVisible = true;
+
+  /// 画面亮度（0.7.2，`XQ-0105`）：1.0 = 原始画面，最低压到 [_minBrightness]。
+  ///
+  /// 用 `ColorFiltered` 只压暗**视频画面本身**，不动系统屏幕亮度，
+  /// 也不影响控件与文字（否则界面会跟着变得看不清）。
+  static const double _minBrightness = .3;
+  final _brightness = ValueNotifier<double>(1);
+
+  /// 「自动连播切到了下一集」进行中（0.7.2，`XQ-0104`）。
+  ///
+  /// 自动切集时**不弹整套控件**（用户：每集都弹进度条很碍事），
+  /// 只保留中央的加载提示；任何用户操作都会立刻解除该状态、恢复常态。
+  bool _autoAdvancing = false;
+
   int _generation = 0;
   int _episodeIndex = 0;
   int _quality = 0;
@@ -1282,6 +1349,22 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
 
   /// 迟迟不起播的容忍轮次（约 15 秒，超过即自动恢复一次）。
   static const _firstFrameTicksLimit = 15;
+
+  /// 用户是否**主动暂停**（0.6.11 新增）。
+  ///
+  /// 存在原因：健康检查需要区分两种 `playing == false`：
+  /// - **用户主动暂停** → 必须保持暂停，绝不能自动恢复；
+  /// - **播放中断**（起播后卡住 / 缓冲耗尽 / 解码停顿）→ 应当自动恢复。
+  ///
+  /// 只有记录了这个标记，才能在"跑不动"的兜底里安全地区分两者。
+  /// 置位：`_togglePlayback` 暂停时；清除：恢复播放、重新加载、切集时。
+  bool _userPaused = false;
+
+  /// 起播后又掉回停止态的连续轮次（0.6.11 新增，用于第三条兜底）。
+  int _stalledTicks = 0;
+
+  /// 起播后停住的容忍轮次（约 10 秒）。
+  static const _stalledTicksLimit = 10;
 
   /// 应用是否在前台。后台时不判定"卡住"，否则会被误判。
   bool _foreground = true;
@@ -1378,6 +1461,8 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
         _failHandoff('接收用户已变更，推送已取消');
       }
     }
+    // 0.7.4：自动连播切进来的页面一开始就静默（不弹控件）。
+    _autoAdvancing = widget.autoEnter;
     if (widget.active) _prepare();
   }
 
@@ -1572,6 +1657,11 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
   /// 不预载的情况：本地文件模式、单剧模式、加载中/出错、当前不在播放。
   void _syncPreload() {
     if (_closed) return;
+    // 0.7.3（XQ-0107）：移动网络下不自动播放时也不预加载，避免后台跑流量。
+    if (_autoPlayBlocked) {
+      _preloader.pause();
+      return;
+    }
     // 本地文件不预载（无网络解析成本）。
     // 0.6.9：**不 clear** 共享预载器（它可能正持有别的页面要用的结果）。
     if (widget.localOnly) return;
@@ -1736,6 +1826,13 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
       if (_closed || _playerReleased || !widget.active || _error != null) {
         return;
       }
+      // 0.7.4：移动网络下"按设计不自动播"不是故障，健康检查整体跳过，
+      // 避免反复 `_recover()` 切换备用线路。
+      if (_autoPlayBlocked) {
+        _firstFrameTicks = 0;
+        _stalledTicks = 0;
+        return;
+      }
       final current = _player;
       if (current == null) return;
       // 兜底一：地址已交出但迟迟不起播（弱网 / 服务端迟迟不给数据）。
@@ -1763,6 +1860,37 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
         now: DateTime.now(),
       )) {
         unawaited(_recover());
+        return;
+      }
+
+      // 兜底三（0.6.11 新增，用户反馈"偶发下一个视频纯黑无文字、不播放"）：
+      //
+      // 覆盖前两条**都管不到**的盲区：
+      //   `_awaitingFirstFrame == false`（已被"短暂起播"清掉）
+      //   且 `playing == false`（随即卡住/缓冲耗尽）
+      //   且 `_loading == false`、`_error == null`
+      // → 兜底一要求 `_awaitingFirstFrame`、兜底二要求 `playing == true`，
+      //   两条同时失效，页面**永久纯黑无文字**。
+      //
+      // 这正是"播放器短暂报告 playing=true（清掉等待标记）→ 立刻卡住"的产物：
+      // 从状态上它既不是"从未起播"，也不是"正在播放却卡住"，
+      // 而是第三条路——**起播过，又掉回停止态**。
+      //
+      // 判定条件必须排除 `_userPaused`，否则用户的暂停会被当成故障自动播回去
+      // （那就是另一个已修问题 1 的翻版）。
+      if (_ready &&
+          !current.state.playing &&
+          !current.state.completed &&
+          _foreground &&
+          !_userPaused) {
+        _stalledTicks++;
+        if (_stalledTicks >= _stalledTicksLimit) {
+          _stalledTicks = 0;
+          unawaited(_recover());
+          return;
+        }
+      } else {
+        _stalledTicks = 0;
       }
     });
     for (final stream in [
@@ -1819,6 +1947,12 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
           if (!_closed) setState(() {});
         }
         // 局域网推送（0.6.4）：播放真正开始后回报发送端。
+        if (playing && _autoAdvancing) {
+          // 0.7.2（XQ-0104）：自动连播已经起播，解除静默状态。
+          // 之后控件恢复正常的"4 秒后自动隐藏"节奏，不会一直挂在屏幕上。
+          _autoAdvancing = false;
+          _refreshFullscreen(immediate: true);
+        }
         if (playing) {
           _scheduleHide();
           _acknowledgeHandoff();
@@ -1833,7 +1967,7 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
         if (widget.autoNextEpisode &&
             detail != null &&
             _episodeIndex + 1 < detail.episodes.length) {
-          unawaited(_playEpisode(_episodeIndex + 1));
+          unawaited(_playEpisode(_episodeIndex + 1, auto: true));
         } else {
           widget.onFinished();
         }
@@ -1873,13 +2007,24 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
   @override
   void didUpdateWidget(covariant _FeedPage oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // 0.7.4：目标页可能在"自动连播跳转"之前就被 PageView 预构建了，
+    // 那时 `initState` 读到的 `autoEnter` 还是 false。这里补一次。
+    if (widget.autoEnter && !oldWidget.autoEnter && !_ready) {
+      _autoAdvancing = true;
+    }
     if (widget.active && !oldWidget.active) {
       // 成为当前页：重新上报能否切下一集，避免沿用上一页的状态。
       _reportEpisodeState();
       if (_ready && _error == null) {
         _playerReleased = false;
         unawaited(_player?.play());
-        _showControls();
+        // 0.7.4：自动连播切进来的页面不主动弹控件。
+        if (_autoAdvancing) {
+          _hideTimer?.cancel();
+          setState(() => _controlsVisible = false);
+        } else {
+          _showControls();
+        }
       } else if (_playerReleased) {
         // 0.3.5：本页曾经被滑走并放弃了一次加载，这里重新建播放器接着加载，
         // 不需要用户"切到别的集再切回来"来绕过。
@@ -1948,6 +2093,22 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
     _ready = false;
     _plan = null;
     _loading = true;
+    // 0.6.11 修复（用户反馈"偶发下一个视频黑屏不播放"）：
+    //
+    // `_releasePlayer()` 之前**没有清 `_awaitingFirstFrame` / `_firstFrameTicks`**。
+    // 若本页在"等待首帧"期间被滑走（`_awaitingFirstFrame == true`），
+    // 该标记会残留到下次回来。回来时 `_prepare()` 若因 `_ready` 等条件提前返回，
+    // 就出现 `_loading == false`（被别处改掉）且 `_awaitingFirstFrame == true`
+    // 且 `playing == false` 的中间态 —— 此时：
+    //   - 加载提示条件 `_loading || (_awaitingFirstFrame && !playing)` 本应成立；
+    //   - 但若 `_awaitingFirstFrame` 也被别处清掉，就**两者皆假** → **纯黑无文字**。
+    // 因此释放播放器时必须把"等待首帧"这套状态**彻底归零**，
+    // 让下次 `_prepare()` 从干净状态开始。
+    _awaitingFirstFrame = false;
+    _firstFrameTicks = 0;
+    // 0.6.11：连同"用户暂停""停住计数"一起归零，避免残留到下次重建。
+    _userPaused = false;
+    _stalledTicks = 0;
     if (player != null) unawaited(player.dispose());
   }
 
@@ -1978,6 +2139,7 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
     }
     _fullscreenNavigator = null;
     _fullscreenRevision.dispose();
+    _brightness.dispose();
     _tick.dispose();
     // 若离开时还锁着横屏，必须恢复竖屏并显示系统栏，否则整个应用会一直横着。
     if (_landscape) {
@@ -2075,6 +2237,8 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
 
   void _showControls() {
     _hideTimer?.cancel();
+    // 用户主动操作 → 解除"自动连播静默"，恢复常态显隐。
+    _autoAdvancing = false;
     if (!_controlsVisible && mounted) {
       setState(() => _controlsVisible = true);
       // 用户操作，跳过节流立即刷新（0.3.1）。
@@ -2102,6 +2266,8 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
 
   void _tap() {
     if (_interactions?.suppressTap ?? false) return;
+    // 用户点了画面 → 解除自动连播静默，这次点击要能看到效果。
+    _autoAdvancing = false;
     setState(() => _controlsVisible = !_controlsVisible);
     _refreshFullscreen();
     _scheduleHide();
@@ -2110,10 +2276,17 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
   void _togglePlayback() {
     final player = _player;
     if (player == null || _closed || _loading || _error != null) return;
+    _autoAdvancing = false;
     // 局域网推送（0.6.4）：用户操作了播放 → 接收端接手。
     _takeOverHandoff();
     _interactions?.cancel();
     final willPlay = !player.state.playing;
+    if (willPlay) {
+      // 0.7.3（XQ-0107）：用户主动点了播放 → 本次会话内不再拦截自动播放，
+      // 并恢复预加载（移动网络下此前为了省流量暂停了预载）。
+      widget.manualPlayed.value = true;
+      _autoPlayBlocked = false;
+    }
     // 0.6.4 修复（用户反馈"暂停时会多走一帧才停下来"）：
     // 原先统一用 `playOrPause()`，它内部走的是 mpv 的
     // `_command(['cycle','pause'])` —— **"切换"命令**，需要 mpv 先读当前状态再翻转，
@@ -2124,8 +2297,31 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
     // 顺带消除一个隐患：`cycle` 在状态不同步时可能"翻反"（该停却播），
     // 直接设值不会出现这种情况。
     unawaited(willPlay ? player.play() : player.pause());
-    // 暂停时立刻落盘，避免用户暂停后直接退出导致进度丢失。
-    if (!willPlay) unawaited(_saveProgress());
+    // 0.6.11 修复（用户反馈"双击暂停后出现正在加载视频提示，过一会儿自己播放"）：
+    //
+    // 根因：`_awaitingFirstFrame` 在 `_prepare()` 成功后置 true，本意是"等首帧"，
+    // 只有 `playing == true` 才会清掉（见 playing 流监听）。
+    // 若用户在首帧到达前就暂停，`playing` 一直是 false → 该标记**永远留着**
+    // → 健康检查的"从未起播"兜底（`_awaitingFirstFrame && !playing`）成立
+    // → 每秒计数，**15 秒后触发 `_recover()` 自动重播**。
+    // 表现就是：暂停 → 加载提示重新出现 → 过一会儿自己开始播。
+    //
+    // 修法：**用户主动暂停 = 明确意图**，必须立即结束"等待首帧"状态，
+    // 否则健康检查会把"用户暂停"误判成"从未起播"。
+    if (!willPlay) {
+      _awaitingFirstFrame = false;
+      _firstFrameTicks = 0;
+      // 0.6.11：记录"用户主动暂停"，供健康检查兜底三区分
+      // "用户暂停" 与 "起播后卡住"——否则暂停会被当成故障自动播回去。
+      _userPaused = true;
+      _stalledTicks = 0;
+      // 暂停时立刻落盘，避免用户暂停后直接退出导致进度丢失。
+      unawaited(_saveProgress());
+    } else {
+      // 用户恢复播放：解除暂停标记，健康检查恢复正常兜底。
+      _userPaused = false;
+      _stalledTicks = 0;
+    }
     // 0.6.3 修复（用户反馈"双击恢复后中央图标仍是暂停"）：
     // 原先这里不重建，中央播放图标与底部播放/暂停键要等下一次
     // 整页 setState（如自动隐藏计时器到期）才更新，表现为"视频在播、图标不变"。
@@ -2361,10 +2557,13 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _playEpisode(int index) async {
+  Future<void> _playEpisode(int index, {bool auto = false}) async {
     final detail = _detail;
     if (_closed || detail == null) return;
     if (index < 0 || index >= detail.episodes.length) return;
+    // 0.7.2（XQ-0104）：auto = 自动连播切来的，本次换集不弹整套控件。
+    // 任何手动换集（上下滑 / 选集 / 上一集按钮）都传默认 false，行为不变。
+    _autoAdvancing = auto;
     // 换集前先把当前集的进度存下来，否则切走就丢。
     await _saveProgress();
     // 0.3.5：等待落盘期间页面可能已被滑走（播放器已释放）。
@@ -2498,7 +2697,19 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
       // 续播位置（0.2.29）：只有首次打开、且传入了非零位置时才生效；
       // 换集时 `_playEpisode` 会把 `_pendingStart` 清空，避免每集都跳。
       final start = _takeStartPosition();
-      await _openMedia(player, plan, start);
+      // 0.7.4 修复（真机反馈"全屏连播下一集仍会弹控件"）：
+      // **必须在 open 之前快照**。播放器 `open(play: true)` 可能在 await 返回前
+      // 就报告 `playing == true`，从而在下面的 setState 之前把 `_autoAdvancing`
+      // 清掉；若这里直接读字段，本轮就会误判为"需要显示控件"（坑 64 的变体）。
+      final autoAdvance = _autoAdvancing;
+      // 0.7.3（XQ-0107）：移动网络下不自动播放（除非开关开启或本次已手动播过）。
+      _autoPlayBlocked = await _resolveAutoPlayBlocked();
+      await _openMedia(
+        player,
+        plan,
+        start,
+        play: widget.active && !_autoPlayBlocked,
+      );
       // 0.3.5：open 之后再次确认播放器仍然有效
       // （用户可能在加载中滑走页面，此时播放器已被释放）。
       if (!_attemptAlive(player)) return;
@@ -2510,12 +2721,24 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
       setState(() {
         _loading = false;
         _ready = true;
-        _controlsVisible = true;
+        // 0.7.2（XQ-0104）：自动连播换集时保持控件收起。
+        _controlsVisible = !autoAdvance;
         // 0.6.9：`open()` 返回 ≠ 已起播。这里开始"等待第一帧"，
         // 期间**保留加载提示**（避免纯黑无反应），并在健康检查里兜底自动恢复。
         // 注意：有错误时不能显示加载提示，否则会盖住"点击重试"。
-        _awaitingFirstFrame = _error == null;
+        //
+        // 0.7.4（真机反馈"移动网络不播放时一直显示正在加载、反复切备用线路"）：
+        // 移动网络拦截自动播放时，播放器是"已就绪但按设计不播"，
+        // **不能**进入"等待首帧"，否则健康检查三道兜底会把它当成故障，
+        // 反复 `_recover()` 切备用线路。
+        _awaitingFirstFrame = !_autoPlayBlocked && _error == null;
         _firstFrameTicks = 0;
+        // 0.6.11：新内容开始加载 = 一次全新的播放，
+        // 用户之前的暂停意图不再适用（否则新一集会"以为用户暂停"而不恢复）。
+        // 0.7.4：但"移动网络下按设计不自动播"要当成**用户主动不播**，
+        // 否则同样会被健康检查判为卡死。
+        _userPaused = _autoPlayBlocked;
+        _stalledTicks = 0;
       });
       // 加载成功：复位健康检查与恢复计数（0.6.0）。
       // 不复位的话，上一次的失败计数会累计，导致本次偶发卡顿直接判为"停止"。
@@ -2532,6 +2755,9 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
       _refreshAspectRatio();
     } catch (error) {
       if (_closed || generation != _generation) return;
+      // 0.7.2（XQ-0104）：自动连播失败时必须解除静默，否则控件会一直不出现，
+      // 用户连"重试"以外的操作都摸不到。
+      _autoAdvancing = false;
       setState(() {
         _loading = false;
         // 0.6.9：进入错误态后不再"等待第一帧"，否则加载提示会盖住"点击重试"。
@@ -2550,12 +2776,35 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
   /// 期间用户可能已经滑走页面、播放器已被释放；此时若继续调用
   /// `open()`，media_kit 在 release 包中断言被移除，会**静默什么都不做**，
   /// 页面就永久黑屏。
-  Future<void> _openMedia(Player player, PlaybackPlan plan, Duration? start) {
+  /// 移动网络下是否禁止自动起播（0.7.3，`XQ-0107`）。
+  ///
+  /// 每次换集/换剧时按"当前网络类型 + 设置开关 + 是否手动播过"重新判定：
+  /// - 开关开启 → 不拦（与 Wi-Fi 一致）；
+  /// - 本次已手动播过 → 不拦；
+  /// - 移动网络 → 拦截（只加载首帧，等用户点一下）；
+  /// - 无法判断网络（桌面端 / 通道异常）→ 不拦，避免误伤。
+  bool _autoPlayBlocked = false;
+
+  Future<bool> _resolveAutoPlayBlocked() async {
+    // 详情页/下载页的主动点播、本地文件播放：与流量无关，不拦。
+    if (widget.singleDrama || widget.localOnly) return false;
+    if (widget.store.autoPlayOnMobile) return false;
+    if (widget.manualPlayed.value) return false;
+    final kind = await NetworkState.current();
+    return kind == NetworkKind.mobile;
+  }
+
+  Future<void> _openMedia(
+    Player player,
+    PlaybackPlan plan,
+    Duration? start, {
+    required bool play,
+  }) {
     return _serialize(() async {
       if (!_attemptAlive(player)) return;
       await player.open(
         Media(plan.url, httpHeaders: plan.headers, start: start),
-        play: widget.active,
+        play: play,
       );
     });
   }
@@ -2737,9 +2986,10 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
 
   /// 左上角集数标签：显示当前第几集。
   ///
-  /// 放在控件层内，因此**跟随控件一起显隐**（用户要求），
-  /// 单击画面隐藏控件时它也会一并消失，不长期遮挡视频。
-  Widget _episodeBadge() => Align(
+  /// 竖屏时放在控件层内，**跟随控件一起显隐**（用户要求）；
+  /// 全屏时由调用方放在控件层之外，改为**常显**（0.7.2，`XQ-0103`）。
+  /// [textKey] 用于区分两个位置（全屏与竖屏可能同时在树中）。
+  Widget _episodeBadge({Key? textKey}) => Align(
     alignment: Alignment.topLeft,
     child: SafeArea(
       bottom: false,
@@ -2754,7 +3004,7 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             child: Text(
               '第${_episodeIndex + 1}集',
-              key: const ValueKey('feed-episode-badge'),
+              key: textKey ?? const ValueKey('feed-episode-badge'),
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 12,
@@ -2765,6 +3015,27 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
         ),
       ),
     ),
+  );
+
+  /// 对视频画面套一层亮度滤镜（0.7.2，`XQ-0105`）。
+  ///
+  /// 只作用于**画面本身**（`Video`），不影响控件与文字；
+  /// 用 `ValueListenableBuilder` 的 `child` 形式，亮度变化时不重建视频子树。
+  Widget _applyBrightness(Widget child) => ValueListenableBuilder<double>(
+    valueListenable: _brightness,
+    child: child,
+    builder: (context, value, inner) {
+      if (value >= .999) return inner!;
+      return ColorFiltered(
+        colorFilter: ColorFilter.matrix(<double>[
+          value, 0, 0, 0, 0, //
+          0, value, 0, 0, 0, //
+          0, 0, value, 0, 0, //
+          0, 0, 0, 1, 0, //
+        ]),
+        child: inner!,
+      );
+    },
   );
 
   Future<void> _setSpeed(double value) async {
@@ -2797,6 +3068,7 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
   Future<void> _openPanel(Future<void> Function() show) async {
     _hideTimer?.cancel();
     _interactions?.cancel();
+    _autoAdvancing = false;
     setState(() {
       _panelOpen = true;
       _controlsVisible = true;
@@ -3249,6 +3521,168 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
     }
   }
 
+  // ===== 全屏横屏分区手势（0.7.2，XQ-0105）=====
+  //
+  // 竖屏手势**完全不变**（任意位置上下滑切集）；这里只接管全屏横屏：
+  // - 左右滑：调整进度（整屏宽度 = 90 秒，松手生效）；
+  // - 左侧 1/3 上下滑：画面亮度；
+  // - 右侧 1/3 上下滑：应用内音量；
+  // - 中间 1/3 上下滑：上一集 / 下一集（沿用原有语义）。
+  //
+  // 长按 3 倍速、双击暂停、单击显隐仍由 `PlayerInteractions` 负责，
+  // 因此这里仍然调用它的 pointerDown/Move/Up；只是**禁用它的上下滑切集**
+  // （`swipeEnabled: false`），避免一次滑动被执行两遍。
+
+  /// 整屏宽度对应的快进/快退秒数。
+  static const double _fsSeekSecondsPerWidth = 90;
+
+  int? _fsPointer;
+  Offset? _fsOrigin;
+  Offset? _fsLast;
+  bool _fsMoved = false;
+  bool _fsGuarded = false;
+  Duration _fsDownAt = Duration.zero;
+  double _fsStartBrightness = 1;
+  double _fsStartVolume = 100;
+  Duration _fsStartPosition = Duration.zero;
+  Duration? _fsSeekTarget;
+  _FsGesture _fsGesture = _FsGesture.none;
+
+  void _fsPointerDown(PointerDownEvent event, Size size) {
+    _interactions?.pointerDown(event, swipeEnabled: false, height: size.height);
+    if (event.buttons != kPrimaryButton) return;
+    if (_fsPointer != null) return;
+    _fsPointer = event.pointer;
+    _fsOrigin = _fsLast = event.localPosition;
+    _fsMoved = false;
+    _fsGuarded =
+        event.localPosition.dy < PlayerInteractions.topGestureGuard;
+    _fsDownAt = event.timeStamp;
+    _fsGesture = _FsGesture.none;
+    _fsSeekTarget = null;
+    _fsStartBrightness = _brightness.value;
+    final player = _player;
+    _fsStartVolume = player?.state.volume ?? 100;
+    _fsStartPosition = player?.state.position ?? Duration.zero;
+  }
+
+  void _fsPointerMove(PointerMoveEvent event, Size size) {
+    _interactions?.pointerMove(event);
+    if (_fsPointer != event.pointer || _fsOrigin == null || _fsGuarded) return;
+    _fsLast = event.localPosition;
+    final delta = event.localPosition - _fsOrigin!;
+    if (!_fsMoved) {
+      if (delta.distance <= 12) return;
+      _fsMoved = true;
+    }
+    if (_fsGesture == _FsGesture.none) {
+      _fsGesture = delta.dx.abs() > delta.dy.abs()
+          ? _FsGesture.seek
+          : _fsVerticalZone(_fsOrigin!.dx, size.width);
+    }
+    switch (_fsGesture) {
+      case _FsGesture.seek:
+        final player = _player;
+        if (player == null || player.state.duration <= Duration.zero) return;
+        final seconds = delta.dx / size.width * _fsSeekSecondsPerWidth;
+        final raw =
+            _fsStartPosition +
+            Duration(milliseconds: (seconds * 1000).round());
+        final target = Duration(
+          milliseconds: raw.inMilliseconds.clamp(
+            0,
+            player.state.duration.inMilliseconds,
+          ),
+        );
+        _fsSeekTarget = target;
+        _interactions?.hint(
+          '${seconds >= 0 ? '快进至' : '后退至'} ${formatPosition(target.inSeconds.toDouble())}',
+        );
+      case _FsGesture.brightness:
+        _setBrightness(
+          (_fsStartBrightness - delta.dy / (size.height * .7)).clamp(
+            _minBrightness,
+            1.0,
+          ),
+        );
+      case _FsGesture.volume:
+        final value = (_fsStartVolume - delta.dy / (size.height * .7) * 100)
+            .clamp(0.0, 100.0);
+        final player = _player;
+        if (player != null) unawaited(player.setVolume(value));
+        _interactions?.hint(value <= 0 ? '已静音' : '音量 ${value.round()}%');
+      case _FsGesture.episode:
+      case _FsGesture.none:
+        break;
+    }
+  }
+
+  void _fsPointerUp(PointerUpEvent event, Size size) {
+    _interactions?.pointerUp(event);
+    if (_fsPointer != event.pointer) return;
+    final origin = _fsOrigin;
+    final last = _fsLast ?? event.localPosition;
+    final gesture = _fsGesture;
+    final moved = _fsMoved;
+    final guarded = _fsGuarded;
+    final target = _fsSeekTarget;
+    final downAt = _fsDownAt;
+    _fsPointer = null;
+    _fsOrigin = null;
+    _fsLast = null;
+    _fsMoved = false;
+    _fsGuarded = false;
+    _fsGesture = _FsGesture.none;
+    _fsSeekTarget = null;
+    if (origin == null || guarded) return;
+    // 滑动后抑制紧随其后的单击，避免"滑完又弹出控件"。
+    if (moved) _interactions?.blockTap();
+    final delta = last - origin;
+    switch (gesture) {
+      case _FsGesture.seek:
+        final player = _player;
+        if (target == null || player == null) return;
+        if (player.state.duration <= Duration.zero) return;
+        unawaited(player.seek(target));
+        _showControls();
+      case _FsGesture.episode:
+        final threshold = math.max(56.0, math.min(100.0, size.height * .1));
+        if (delta.dy.abs() < threshold) return;
+        if (delta.dy.abs() <= delta.dx.abs() * 1.5) return;
+        if (event.timeStamp - downAt > const Duration(milliseconds: 1500)) {
+          return;
+        }
+        final message = _swipeEpisode(delta.dy < 0 ? 1 : -1);
+        if (message.isNotEmpty) _interactions?.hint(message);
+      case _FsGesture.brightness:
+      case _FsGesture.volume:
+      case _FsGesture.none:
+        return;
+    }
+  }
+
+  void _fsPointerCancel(PointerCancelEvent event) {
+    _interactions?.pointerCancel(event);
+    _fsPointer = null;
+    _fsOrigin = null;
+    _fsLast = null;
+    _fsMoved = false;
+    _fsGuarded = false;
+    _fsGesture = _FsGesture.none;
+    _fsSeekTarget = null;
+  }
+
+  _FsGesture _fsVerticalZone(double x, double width) {
+    if (x < width / 3) return _FsGesture.brightness;
+    if (x > width * 2 / 3) return _FsGesture.volume;
+    return _FsGesture.episode;
+  }
+
+  void _setBrightness(double value) {
+    _brightness.value = value;
+    _interactions?.hint('亮度 ${(value * 100).round()}%');
+  }
+
   /// 全屏层内容：视频铺满 + 手势 + 可自动隐藏的简洁控件。
   ///
   /// 0.2.28（方案 D）：本层现在是**全屏路由的内容**（不是 OverlayEntry），
@@ -3285,6 +3719,8 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
             final boosting = _interactions?.boosting ?? false;
             final controlsVisible =
                 !boosting &&
+                // 0.7.2（XQ-0104）：自动连播换集期间不弹进度条与按钮。
+                !_autoAdvancing &&
                 (_controlsVisible || !(state?.playing ?? false) || _loading);
             return Material(
               // 全屏路由已脱离竖滑页所在的主题树（push 到 Navigator 之上），
@@ -3297,31 +3733,28 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
                   fit: StackFit.expand,
                   children: [
                     if (video != null)
-                      Video(
-                        controller: video,
-                        controls: (_) => const SizedBox.shrink(),
-                        // 全屏时铺满整个屏幕。
-                        fit: BoxFit.contain,
+                      _applyBrightness(
+                        Video(
+                          controller: video,
+                          controls: (_) => const SizedBox.shrink(),
+                          // 全屏时铺满整个屏幕。
+                          fit: BoxFit.contain,
+                        ),
                       )
                     else
                       const ColoredBox(color: Colors.black),
-                    // 手势层：单击显隐控件，双击播放/暂停，上下滑切集。
+                    // 手势层（0.7.2，XQ-0105）：全屏横屏按左右分区处理
+                    // 进度 / 亮度 / 音量 / 切集；单击显隐、双击暂停仍在这里。
                     Positioned.fill(
                       child: Listener(
                         behavior: HitTestBehavior.opaque,
-                        onPointerDown: (event) => _interactions?.pointerDown(
-                          event,
-                          // 0.2.31：启用上下滑切集（全屏是独立路由，必须由本层承担）。
-                          // 0.6.7：顶部 60px 由 `PlayerInteractions` 内部排除，
-                          // 让系统手势（拉通知栏 / 控制中心）正常生效。
-                          swipeEnabled: true,
-                          height: MediaQuery.sizeOf(context).height,
-                        ),
+                        onPointerDown: (event) =>
+                            _fsPointerDown(event, MediaQuery.sizeOf(context)),
                         onPointerMove: (event) =>
-                            _interactions?.pointerMove(event),
-                        onPointerUp: (event) => _interactions?.pointerUp(event),
-                        onPointerCancel: (event) =>
-                            _interactions?.pointerCancel(event),
+                            _fsPointerMove(event, MediaQuery.sizeOf(context)),
+                        onPointerUp: (event) =>
+                            _fsPointerUp(event, MediaQuery.sizeOf(context)),
+                        onPointerCancel: _fsPointerCancel,
                         child: GestureDetector(
                           behavior: HitTestBehavior.opaque,
                           onTap: _tap,
@@ -3329,8 +3762,15 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
                         ),
                       ),
                     ),
+                    // 与竖屏主层保持一致（0.6.11）：补上"已就绪但无画面"的兜底，
+                    // 避免全屏时出现纯黑无文字。
                     if (_loading ||
-                        (_awaitingFirstFrame && !(_player?.state.playing ?? false)))
+                        (_awaitingFirstFrame && !(_player?.state.playing ?? false)) ||
+                        (!_userPaused &&
+                            _ready &&
+                            _error == null &&
+                            !(_player?.state.playing ?? false) &&
+                            (_player?.state.width ?? 0) <= 0))
                       const IgnorePointer(
                         child: LoadingHint(message: '正在加载视频…', dark: true),
                       )
@@ -3360,6 +3800,17 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
                                 child: const Text('重试'),
                               ),
                             ],
+                          ),
+                        ),
+                      ),
+                    // 0.7.2（XQ-0103）：全屏左上角**常显**集数标识。
+                    // 用户明确要求"一直显示"，因此放在控件层之外，
+                    // 不受 `controlsVisible` 影响；单集剧仍不显示（与竖屏判据一致）。
+                    if (_hasEpisodeBadge)
+                      IgnorePointer(
+                        child: _episodeBadge(
+                          textKey: const ValueKey(
+                            'fullscreen-episode-badge',
                           ),
                         ),
                       ),
@@ -3680,16 +4131,14 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final video = _video;
     final state = _player?.state;
-    final duration = state?.duration.inMilliseconds ?? 0;
-    final position = state?.position.inMilliseconds ?? 0;
-    final buffered = state?.buffer.inMilliseconds ?? 0;
-    final total = duration > 0 ? duration / 1000 : 1.0;
     // 长按加速（3 倍速）期间只保留中央的加速提示，
     // 必须把完整控件层（进度条 + 剧名 + 简介 + 按钮）整体隐藏，
     // 否则加速时这些信息会盖住画面。
     final boosting = _interactions?.boosting ?? false;
     final visible =
         !boosting &&
+        // 0.7.2（XQ-0104）：自动连播换集期间不弹整套控件（只留加载提示）。
+        !_autoAdvancing &&
         (_controlsVisible ||
             _panelOpen ||
             _loading ||
@@ -3702,10 +4151,12 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
           // 测试注入的视频层：不依赖原生视频控制器。
           widget.videoBuilder!(const SizedBox.shrink())
         else if (video != null && !_landscape)
-          Video(
-            controller: video,
-            controls: (_) => const SizedBox.shrink(),
-            fit: BoxFit.contain,
+          _applyBrightness(
+            Video(
+              controller: video,
+              controls: (_) => const SizedBox.shrink(),
+              fit: BoxFit.contain,
+            ),
           )
         else if (_landscape)
           // 全屏时画面由全屏层渲染，这里留黑避免同一路视频被渲染两次。
@@ -3732,7 +4183,24 @@ class _FeedPageState extends State<_FeedPage> with WidgetsBindingObserver {
             ),
           ),
         ),
-        if (_loading || (_awaitingFirstFrame && !(state?.playing ?? false)))
+        // 0.6.11 修复（用户反馈"偶发下一个视频黑屏不播放"，且是**纯黑无文字**）：
+        //
+        // 纯黑无文字意味着**加载提示与错误提示都没渲染**，
+        // 即 `_loading == false`、`_awaitingFirstFrame == false`、`_error == null`
+        // 三者同时成立，但画面又没出来 —— 这是"中间态漏洞"。
+        //
+        // 兜底条件补上「已就绪但播放器没有任何画面」：
+        // 只要本页已 `_ready`、无错误、且播放器**既没在播也没有可用帧**，
+        // 就显示加载提示，绝不让用户面对一块没有任何文字的黑屏。
+        if (_loading ||
+            (_awaitingFirstFrame && !(state?.playing ?? false)) ||
+            // 注意：必须排除 `_userPaused`，否则用户暂停后（此时 width 可能为 0）
+            // 会错误地显示"正在加载视频…"。
+            (!_userPaused &&
+                _ready &&
+                _error == null &&
+                !(state?.playing ?? false) &&
+                (state?.width ?? 0) <= 0))
           const IgnorePointer(
             child: LoadingHint(message: '正在加载视频…', dark: true),
           )

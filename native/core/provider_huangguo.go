@@ -33,8 +33,8 @@ const (
 
 var (
 	huangguoAIBaseURL     = "https://huangguoai.com"
-	huangguoAIBaseMirrors = []string{"https://huangguoai.com", "https://ttvoij.ediayikma.cc", "https://thu.ediayikma.cc", "https://pku.ediayikma.cc", "https://fdu.ediayikma.cc", "https://thu.agdkczeyx.cc"}
-	huangguoVideoBaseURL  = "https://huangguo.video"
+	huangguoAIBaseMirrors = []string{"https://huangguoai.com", "https://thu.agdkczeyx.cc", "https://ttvoij.ediayikma.cc", "https://thu.ediayikma.cc", "https://pku.ediayikma.cc", "https://fdu.ediayikma.cc"}
+	huangguoVideoBaseURL  = "https://huangguoai.fit"
 
 	huangguoAISlugs     = []string{"recommend", "newest", "ai-duanju", "ai-manju", "ai-huanlian", "ai-mogai", "ranks/hot"}
 	huangguoAITypeNames = map[string]string{"recommend": "精选推荐", "newest": "最近上新", "ai-duanju": "AI成人短剧", "ai-manju": "AI成人漫剧", "ai-huanlian": "AI换脸", "ai-mogai": "AI魔改", "ranks/hot": "排行榜"}
@@ -97,7 +97,7 @@ func canonicalProviderSource(source string) string {
 	switch strings.ToLower(strings.TrimSpace(source)) {
 	case "huangguo", "huangguoai", "huangguoai.com":
 		return sourceHuangguoAI
-	case "huangguo-video", "huangguo.video":
+	case "huangguo-video", "huangguo.video", "huangguoai.fit":
 		return sourceHuangguoVideo
 	case "huangdou", "tideember.cc", "xqjurgek.top":
 		return sourceHuangdou
@@ -338,6 +338,11 @@ func (d *Downloader) fetchProviderText(ctx context.Context, rawURL, referer stri
 		referer = rawURL
 	}
 	candidates := d.providerURLCandidates(rawURL)
+	if len(candidates) > 1 {
+		// 多镜像域名（目前只有黄果AI）时通时不通：串行逐个等 5 秒既慢，
+		// 又容易在"这一次刚好都不通"时整源判失败。改为并行竞速，任一可用即成功。
+		return d.fetchProviderTextRacing(ctx, rawURL, referer)
+	}
 	var lastErr error
 	tried := 0
 	for _, candidate := range candidates {
@@ -360,6 +365,9 @@ func (d *Downloader) fetchProviderText(ctx context.Context, rawURL, referer stri
 			timeout := providerTimeout
 			if len(candidates) > 1 {
 				timeout = 5 * time.Second
+			} else if parsed, parseErr := url.Parse(candidate); parseErr == nil && strings.HasSuffix(strings.ToLower(parsed.Hostname()), "huangguoai.fit") {
+				// 黄果剧场（Cloudflare）详情页直连常需 15~25 秒，默认 12 秒会误判超时。
+				timeout = 30 * time.Second
 			}
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, candidate, nil)
 			if err != nil {
@@ -433,21 +441,50 @@ func (d *Downloader) fetchProviderTextRacing(ctx context.Context, rawURL, refere
 	if len(candidates) <= 1 {
 		return d.fetchProviderText(ctx, rawURL, referer)
 	}
+	// 镜像站本身时通时不通（实测同一秒并发 8 个请求只成功 3 个）。
+	// 单波竞速仍可能恰好全失败，因此失败后并行重试，多波叠加显著提高命中率。
+	var lastErr error
+	for wave := 0; wave < 3; wave++ {
+		if wave > 0 {
+			select {
+			case <-time.After(300 * time.Millisecond):
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+		body, err := d.raceProviderCandidates(ctx, rawURL, referer, candidates)
+		if err == nil {
+			return body, nil
+		}
+		lastErr = err
+	}
+	return "", lastErr
+}
+
+func (d *Downloader) raceProviderCandidates(ctx context.Context, rawURL, referer string, candidates []string) (string, error) {
+	const copies = 2
 	type raceResult struct {
 		body string
 		err  error
 	}
+	total := len(candidates) * copies
 	raceCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	results := make(chan raceResult, len(candidates))
+	results := make(chan raceResult, total)
 	for _, candidate := range candidates {
-		go func(target string) {
-			body, err := d.fetchProviderTextTimeout(raceCtx, rawURL, target, referer, 5*time.Second)
-			results <- raceResult{body: body, err: err}
-		}(candidate)
+		for copyIndex := 0; copyIndex < copies; copyIndex++ {
+			go func(target string) {
+				targetCtx := context.WithValue(raceCtx, skipCatalogGateKey{}, true)
+				// 镜像域名统一直连：实测这些域名在代理/VPN 出口下大多不通，
+				// 先试代理会白等满 5 秒，反而让竞速全部超时。
+				targetCtx = context.WithValue(targetCtx, forceDirectKey{}, true)
+				body, err := d.fetchProviderTextTimeout(targetCtx, rawURL, target, referer, 5*time.Second)
+				results <- raceResult{body: body, err: err}
+			}(candidate)
+		}
 	}
 	var lastErr error
-	for range candidates {
+	for index := 0; index < total; index++ {
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
@@ -530,13 +567,13 @@ func providerURLCandidates(rawURL string) []string {
 		seen[candidate] = true
 		out = append(out, candidate)
 	}
-	for i, mirror := range huangguoAIBaseMirrors {
-		if i == 1 {
-			for _, generated := range generatedHuangguoAIMirrors(rawURL, 8) {
-				add(rehostProviderURL(u, generated))
-			}
-		}
+	for _, mirror := range huangguoAIBaseMirrors {
 		add(rehostProviderURL(u, mirror))
+	}
+	// 生成镜像（哈希拼出的子域名）绝大多数不存在，串行尝试每个要白等 5 秒，
+	// 是"黄果AI 更新一次要好几分钟"的主要原因之一。只保留 2 个放最后兜底。
+	for _, generated := range generatedHuangguoAIMirrors(rawURL, 2) {
+		add(rehostProviderURL(u, generated))
 	}
 	if len(out) == 0 {
 		return []string{rawURL}
@@ -815,7 +852,7 @@ func parseHuangguoVideoCards(rawHTML, pageURL string) []Drama {
 			category = "series"
 		}
 		desc := firstNonEmpty(extractClosestAttr(block, 0, len(block), "data-description", "description"), extractDescription(block))
-		out = append(out, Drama{ID: providerDramaID(sourceHuangguoVideo, sourceID), Source: sourceHuangguoVideo, SourceID: sourceID, Title: title, Name: title, Desc: desc, Intro: desc, Cover: cover, CoverURL: cover, CategoryName: category, ChannelName: "huangguo.video", Remark: firstNonEmpty(extractByClassText(block, "bg-black/55"), extractByClassText(block, "text-gold-dim"))})
+		out = append(out, Drama{ID: providerDramaID(sourceHuangguoVideo, sourceID), Source: sourceHuangguoVideo, SourceID: sourceID, Title: title, Name: title, Desc: desc, Intro: desc, Cover: cover, CoverURL: cover, CategoryName: category, ChannelName: "黄果剧场", Remark: firstNonEmpty(extractByClassText(block, "bg-black/55"), extractByClassText(block, "text-gold-dim"))})
 	}
 	return out
 }

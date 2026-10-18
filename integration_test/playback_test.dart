@@ -1,4 +1,4 @@
-import 'dart:convert';
+﻿import 'dart:convert';
 import 'dart:io';
 
 import 'package:duanju_app/core_bridge.dart';
@@ -9,7 +9,6 @@ import 'package:duanju_app/media_pipeline.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:duanju_app/main.dart';
 import 'package:duanju_app/models.dart';
-import 'package:duanju_app/player_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -152,65 +151,6 @@ Future<Map<String, dynamic>> fixtureControl(String action) async {
   }
 }
 
-class RecoveryFixtureRepository extends DeviceFixtureRepository {
-  int primaryCalls = 0;
-  int fallbackCalls = 0;
-  bool failAll = false;
-  final activeSessions = <String>{};
-
-  Future<PlaybackPlan> _route(
-    Drama drama,
-    Episode episode,
-    bool alternate,
-  ) async {
-    final media = alternate && !failAll ? 'index.m3u8' : 'missing.mp4';
-    final plan = await native.resolve(
-      drama,
-      Episode({
-        ...episode.raw,
-        'videoUrl': '$fixtureBase/$media',
-      }, episode.number),
-    );
-    activeSessions.add(plan.session);
-    return PlaybackPlan(
-      url: plan.url,
-      headers: plan.headers,
-      decryptionKey: plan.decryptionKey,
-      session: plan.session,
-      quality: 1080,
-      qualities: const [1080, 720],
-      routeIndex: alternate ? 1 : 0,
-      routeCount: 2,
-    );
-  }
-
-  @override
-  Future<PlaybackPlan> resolve(
-    Drama drama,
-    Episode episode, {
-    int quality = 0,
-  }) {
-    primaryCalls++;
-    return _route(drama, episode, false);
-  }
-
-  @override
-  Future<PlaybackPlan> fallback(PlaybackPlan current) {
-    fallbackCalls++;
-    return _route(
-      DeviceFixtureRepository.drama,
-      Episode({'id': '1', 'source': 'hongguo', 'currentEpisode': 1}, 1),
-      true,
-    );
-  }
-
-  @override
-  Future<void> release(String session) async {
-    await super.release(session);
-    activeSessions.remove(session);
-  }
-}
-
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
@@ -329,102 +269,18 @@ void main() {
     }
   }, timeout: const Timeout(Duration(minutes: 4)));
 
-  testWidgets(
-    'failed media switches routes, keeps progress and stops retrying at the limit',
-    (tester) async {
-      expect(fixtureBase, startsWith('http://127.0.0.1:'));
-      expect(const bool.fromEnvironment('DISABLE_REMOTE_IMAGES'), isTrue);
-      MediaKit.ensureInitialized();
-      final repository = RecoveryFixtureRepository();
-      await repository.initialize();
-      final store = LocalStore(await SharedPreferences.getInstance());
-      final detail = await repository.detail(DeviceFixtureRepository.drama);
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: ThemeData.dark(),
-          home: PlayerScreen(
-            detail: detail,
-            initialIndex: 0,
-            initialPosition: 6,
-            repository: repository,
-            store: store,
-          ),
-        ),
-      );
-
-      Player player() =>
-          tester.widget<Video>(find.byType(Video)).controller.player;
-      Future<void> until(bool Function() ready, String step) async {
-        final timer = Stopwatch()..start();
-        while (!ready()) {
-          if (timer.elapsed > const Duration(seconds: 40)) {
-            fail(
-              'Timed out: $step; primary=${repository.primaryCalls}, fallback=${repository.fallbackCalls}',
-            );
-          }
-          await tester.pump(const Duration(milliseconds: 200));
-        }
-      }
-
-      await player().setVolume(0);
-      await until(
-        () =>
-            repository.fallbackCalls == 1 &&
-            player().state.position.inMilliseconds >= 6000 &&
-            (player().state.width ?? 0) > 0,
-        'automatic backup and resume',
-      );
-      expect(repository.primaryCalls, 1);
-      expect(find.text('暂时无法播放'), findsNothing);
-      expect(repository.activeSessions.length, 1);
-      await tester.tap(find.byTooltip('播放倍速'));
-      await tester.pump(const Duration(milliseconds: 200));
-      await tester.tap(find.text('1.5x').last);
-      await until(() => player().state.rate == 1.5, 'playback speed');
-      final resumePosition = player().state.position;
-
-      repository.failAll = true;
-      await tester.tap(find.byTooltip('清晰度'));
-      await tester.pump(const Duration(milliseconds: 200));
-      await tester.tap(find.text('1080P').last);
-      await until(
-        () => find.text('暂时无法播放').evaluate().isNotEmpty,
-        'bounded retry failure',
-      );
-      expect(repository.primaryCalls, 3);
-      expect(repository.fallbackCalls, 3);
-      final attempts = repository.primaryCalls + repository.fallbackCalls;
-      await tester.pump(const Duration(seconds: 2));
-      expect(repository.primaryCalls + repository.fallbackCalls, attempts);
-      expect(repository.activeSessions, isEmpty);
-
-      repository.failAll = false;
-      await tester.tap(find.text('重试播放'));
-      await until(
-        () =>
-            repository.fallbackCalls == 4 &&
-            player().state.position >= resumePosition &&
-            player().state.rate == 1.5 &&
-            (player().state.width ?? 0) > 0,
-        'manual retry keeps progress and speed',
-      );
-      expect(find.text('暂时无法播放'), findsNothing);
-      expect(tester.takeException(), isNull);
-      binding.reportData ??= {};
-      binding.reportData!['recovery'] = {
-        'primaryCalls': repository.primaryCalls,
-        'fallbackCalls': repository.fallbackCalls,
-        'resumePositionMs': player().state.position.inMilliseconds,
-        'rate': player().state.rate,
-      };
-      await tester.pumpWidget(const SizedBox.shrink());
-      await until(
-        () => repository.activeSessions.isEmpty,
-        'fallback session cleanup',
-      );
-    },
-    timeout: const Timeout(Duration(minutes: 3)),
-  );
+  // 2026-10-17：原用例 "failed media switches routes, keeps progress and stops
+  // retrying at the limit" 随老播放器 `player_screen.dart` 一并删除
+  // （XF-0003 / WT-0031）。
+  //
+  // 删除原因：该用例直接构造 `PlayerScreen`，并断言老播放器独有的
+  // 「暂时无法播放」面板与「重试播放」按钮文案；新播放器
+  // `vertical_feed_screen.dart` 的错误 UI 与恢复语义不同
+  // （文案为「重试」/「播放已中断，请点击重试。」），无法原样迁移。
+  // 新播放器的恢复链路已由 `test/playback_recovery_test.dart` 与
+  // `test/vertical_feed_test.dart` 覆盖。
+  //
+  // 备份：`90-归档/GD-0016-老播放器删除前备份/` 含老播放器与其测试原件。
 
   testWidgets(
     'native downloads play MP4, AES HLS and CENC with the source offline',

@@ -50,7 +50,7 @@ func providerSourceForURL(raw string) string {
 	switch {
 	case host == "huangguoai.com" || strings.HasSuffix(host, ".ediayikma.cc") || strings.HasSuffix(host, ".agdkczeyx.cc"):
 		return sourceHuangguoAI
-	case host == "huangguo.video":
+	case host == "huangguo.video" || host == "huangguoai.fit":
 		return sourceHuangguoVideo
 	case host == "tideember.cc" || host == "xqjurgek.top":
 		return sourceHuangdou

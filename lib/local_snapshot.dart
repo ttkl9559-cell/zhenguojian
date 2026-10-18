@@ -32,6 +32,8 @@ class LocalSnapshot {
     'themeMode',
     'autoExport',
     'exportPosters',
+    'autoUpdateCatalog',
+    'autoPlayOnMobile',
   };
   final SharedPreferences preferences;
   Map<String, Object> _values = {};
@@ -75,6 +77,7 @@ class LocalSnapshot {
         'hideVip',
         'autoExport',
         'exportPosters',
+        'autoUpdateCatalog',
       }.contains(entry.key.split('.').last);
       if (!owns(entry.key) ||
           (boolean ? entry.value is! bool : entry.value is! String)) {

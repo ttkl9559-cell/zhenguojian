@@ -260,7 +260,15 @@ func (engine *nativeEngine) runSourceTask(ctx context.Context, source, operation
 				// 因此这里不再标记为"未完成/错误"，而是标记为"可继续"，
 				// 由前端在检测到 hasMore 时自动发起下一批。
 				record.Stage = "可继续更新"
-				record.Error = "本次更新已到时间上限，已保存进度"
+				// 0.6.11 修正（用户反馈"黄剧源会出现更新已到时间上限，已保存进度，
+				// 怎么回事，是更新超时吗"）：
+				//
+				// 原文案"本次更新已到时间上限，已保存进度"写在 `record.Error` 里，
+				// 前端按错误样式展示，看起来像报错。但它**不是错误**，而是
+				// "本批跑满 10 分钟（`app_sources.go` 的分批上限）、已存盘、可继续"，
+				// 属正常的分批续跑。改成中性描述，并去掉"时间上限"这种
+				// 容易让人误解为"超时失败"的措辞。
+				record.Error = "已更新一批，可继续更新剩余内容"
 			}
 			var backoff *requestBackoff
 			if errors.As(err, &backoff) {

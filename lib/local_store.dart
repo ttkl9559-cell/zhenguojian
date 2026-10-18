@@ -208,6 +208,17 @@ class LocalStore extends ChangeNotifier {
 
   bool get autoExport => !locked && (_bool('autoExport') ?? false);
   bool get exportPosters => !locked && (_bool('exportPosters') ?? false);
+
+  /// 剧库自动更新开关（默认开启）。
+  ///
+  /// 关闭后后台不再定时发起站源更新，用户仍可在「站源管理」里手动更新。
+  bool get autoUpdateCatalog => !locked && (_bool('autoUpdateCatalog') ?? true);
+
+  /// 移动网络下是否自动播放（0.7.3，`XQ-0107`）。
+  ///
+  /// 默认 **false**（用户明确要求：用流量时不自动播放）。
+  /// 关闭时首页刷到新剧只加载首帧，需用户点一下才开始播；Wi-Fi / 有线不受影响。
+  bool get autoPlayOnMobile => !locked && (_bool('autoPlayOnMobile') ?? false);
   String get source {
     if (locked) return '';
     final value = _string(_key('source')) ?? '';
@@ -389,6 +400,10 @@ class LocalStore extends ChangeNotifier {
       _setting('exportPosters', value, admin: true);
   Future<void> setAutoExport(bool value) =>
       _setting('autoExport', value, admin: true);
+  Future<void> setAutoUpdateCatalog(bool value) =>
+      _setting('autoUpdateCatalog', value, admin: true);
+  Future<void> setAutoPlayOnMobile(bool value) =>
+      _setting('autoPlayOnMobile', value);
   Future<void> setHideVip(bool value) => _setting(_key('hideVip'), value);
   Future<void> setSource(String value) {
     if (!allowsSource(value)) return Future.error(StateError('当前用户没有此站源权限'));
@@ -775,6 +790,8 @@ class LocalStore extends ChangeNotifier {
       'themeMode': themeMode,
       'autoExport': autoExport,
       'exportPosters': exportPosters,
+      'autoUpdateCatalog': autoUpdateCatalog,
+      'autoPlayOnMobile': autoPlayOnMobile,
       'libraries': {
         for (final profile in _profiles)
           profile.id: {
@@ -888,6 +905,8 @@ class LocalStore extends ChangeNotifier {
       'themeMode': data['themeMode'] as String? ?? themeMode,
       'autoExport': data['autoExport'] == true,
       'exportPosters': data['exportPosters'] == true,
+      'autoUpdateCatalog': data['autoUpdateCatalog'] != false,
+      'autoPlayOnMobile': data['autoPlayOnMobile'] == true,
     };
     final libraries = data['libraries'] as Map;
     for (final profile in profiles) {

@@ -35,7 +35,7 @@ func mediaRequestHeaders(request *http.Request, referer string) {
 
 func (d *Downloader) isHuangguoVideoURL(address *url.URL) bool {
 	configured, err := url.Parse(d.providerBaseURL(sourceHuangguoVideo))
-	return address != nil && (strings.EqualFold(address.Hostname(), "huangguo.video") || err == nil && strings.EqualFold(address.Host, configured.Host))
+	return address != nil && (strings.EqualFold(address.Hostname(), "huangguo.video") || strings.EqualFold(address.Hostname(), "huangguoai.fit") || err == nil && strings.EqualFold(address.Host, configured.Host))
 }
 
 func (d *Downloader) previewSession(origin string) *huangguoPreviewSession {
@@ -112,14 +112,14 @@ func (d *Downloader) fetchHuangguoPreviewToken(ctx context.Context, origin, refe
 		ExpiresIn int64  `json:"expires_in"`
 	}
 	if json.Unmarshal(body, &result) != nil || !result.OK || result.Token == "" || !validLegacyToken(result.Token) {
-		return "", time.Time{}, errors.New("黄果视频未返回有效播放凭证，请稍后重试")
+		return "", time.Time{}, errors.New("黄果剧场未返回有效播放凭证，请稍后重试")
 	}
 	expiry := time.Now().Add(time.Duration(max(30, min(result.ExpiresIn, 1800))) * time.Second)
 	if result.ExpiresAt > 0 {
 		expiry = time.Unix(result.ExpiresAt, 0)
 	}
 	if !expiry.After(time.Now()) {
-		return "", time.Time{}, errors.New("黄果视频播放凭证已过期，请检查设备时间")
+		return "", time.Time{}, errors.New("黄果剧场播放凭证已过期，请检查设备时间")
 	}
 	return result.Token, expiry, nil
 }
@@ -148,7 +148,15 @@ func (d *Downloader) doMediaRequestWithClient(request *http.Request, client *htt
 		}
 		response, err := client.Do(request)
 		if err != nil {
-			return nil, err
+			// 与目录请求一致：代理连不上媒体服务器时，强制直连再试一次。
+			if request.Context().Err() == nil {
+				if proxy, proxyErr := d.proxyRouter.proxy(request); proxyErr == nil && proxy != nil {
+					response, err = client.Do(request.Clone(context.WithValue(request.Context(), forceDirectKey{}, true)))
+				}
+			}
+			if err != nil {
+				return nil, err
+			}
 		}
 		if keyRequest && attempt == 0 && (response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden) {
 			body, readErr := io.ReadAll(io.LimitReader(response.Body, 64<<10))

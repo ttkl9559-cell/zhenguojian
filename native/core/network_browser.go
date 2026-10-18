@@ -33,7 +33,9 @@ type huangguoBrowserTransport struct {
 }
 
 func newHuangguoBrowserTransport(base http.RoundTripper, downloader *Downloader) *huangguoBrowserTransport {
-	configured, _ := url.Parse(downloader.providerBaseURL(sourceHuangguoVideo))
+	// 浏览器指纹传输只服务旧站 huangguo.video（当时需要过 Cloudflare 与预览凭证）。
+	// 黄果剧场（huangguoai.fit）改用普通请求即可，实测浏览器指纹客户端反而全部超时。
+	configured, _ := url.Parse("https://huangguo.video")
 	transport := &huangguoBrowserTransport{
 		base: base, router: downloader.proxyRouter, host: configured.Host,
 		insecure: downloader.cfg.InsecureTLS, record: downloader.recordDiagnostic,

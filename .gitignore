@@ -38,7 +38,3 @@ ios/Flutter/flutter_export_environment.sh
 ios/Runner/GeneratedPluginRegistrant.*
 ios/DuanjuCore/*.xcframework/
 **/xcuserdata/
-
-# 发布仓库原有规则：构建产物不入库，仅通过 Releases 发布
-*.apk
-*.zip

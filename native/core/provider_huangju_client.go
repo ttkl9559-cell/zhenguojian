@@ -186,6 +186,12 @@ func (client *huangjuAPIClient) request(ctx context.Context, method, route strin
 		return nil
 	}
 	response, err := transport.Do(request)
+	if err != nil && ctx.Err() == nil {
+		// 与目录请求一致：代理连不上时强制直连重试一次（用户开 VPN 也要能用）。
+		if proxy, proxyErr := d.proxyRouter.proxy(request); proxyErr == nil && proxy != nil {
+			response, err = transport.Do(request.Clone(context.WithValue(ctx, forceDirectKey{}, true)))
+		}
+	}
 	if err != nil {
 		return huangjuAPIResponse{}, fmt.Errorf("黄剧连接失败：%w", publicError(err))
 	}

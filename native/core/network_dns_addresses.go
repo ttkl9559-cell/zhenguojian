@@ -19,7 +19,7 @@ var nonPublicCDNNetworks = []netip.Prefix{
 
 func protectedCDNHost(host string) bool {
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
-	for _, domain := range []string{"tuafjz.cn", "zdmhyg.cn", "lkkwip.cn", "bnfuiu.cn"} {
+	for _, domain := range []string{"tuafjz.cn", "zdmhyg.cn", "lkkwip.cn", "bnfuiu.cn", "huangguoai.fit"} {
 		if host == domain || strings.HasSuffix(host, "."+domain) {
 			return true
 		}

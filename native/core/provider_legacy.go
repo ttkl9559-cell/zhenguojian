@@ -213,6 +213,9 @@ func (err *legacyAPIError) Error() string {
 }
 
 func (d *Downloader) legacyRequest(ctx context.Context, method, apiPath string, params any, access legacyAccess) ([]byte, error) {
+	// 黄果旧版接口（CloudFront）直连可用，但对代理/VPN 出口 IP 有登录频率风控
+	//（实测返回 4007 login too frequently）。为保证"开不开 VPN 都能更新"，旧版请求一律直连。
+	ctx = context.WithValue(ctx, forceDirectKey{}, true)
 	var lastErr error
 	attempts := d.cfg.Retries
 	if attempts < 1 {

@@ -70,6 +70,12 @@ class PlayerInteractions extends ChangeNotifier {
     }
   }
 
+  /// 外部手势（全屏分区手势）已处理完一次滑动时调用，
+  /// 抑制紧随其后的单击，避免"滑完进度条又弹出控件"。
+  void blockTap({Duration duration = const Duration(milliseconds: 600)}) {
+    _ignoreTapUntil = DateTime.now().add(duration);
+  }
+
   Future<void> applySpeed() => _setRate(baseSpeed());
 
   Future<void> _setRate(double value) {

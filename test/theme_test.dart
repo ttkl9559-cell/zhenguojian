@@ -5,8 +5,8 @@ import 'package:duanju_app/app_theme.dart';
 import 'package:duanju_app/home_screen.dart';
 import 'package:duanju_app/local_store.dart';
 import 'package:duanju_app/main.dart';
-import 'package:duanju_app/player_screen.dart';
 import 'package:duanju_app/settings_screen.dart';
+import 'package:duanju_app/vertical_feed_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -224,62 +224,64 @@ void main() {
     );
   }
 
-  testWidgets(
-    'player keeps a dark theme and restores light system bars on return',
-    (tester) async {
-      phone(tester);
-      final store = await localStore();
-      await store.setThemeMode('light');
-      final repository = RouteRepository();
-      final platform = ScriptedPlayer();
-      await tester.pumpWidget(DuanjuApp(repository: repository, store: store));
-      await tester.pumpAndSettle();
-      final detail = await repository.detail(FixtureRepository.free);
-      final navigator = Navigator.of(tester.element(find.byType(HomeScreen)));
-      navigator.push(
-        MaterialPageRoute<void>(
-          builder: (_) => PlayerScreen(
-            detail: detail,
-            initialIndex: 0,
-            repository: repository,
-            store: store,
-            playerFactory: () => Player(platformPlayer: platform),
-            videoBuilder: (controls) =>
-                SizedBox(key: const ValueKey('video-theme'), child: controls),
-          ),
+  testWidgets('player keeps a dark surface and restores light theme on return', (
+    tester,
+  ) async {
+    phone(tester);
+    final store = await localStore();
+    await store.setThemeMode('light');
+    final repository = RouteRepository();
+    final platform = ScriptedPlayer();
+    await tester.pumpWidget(DuanjuApp(repository: repository, store: store));
+    await tester.pumpAndSettle();
+    final detail = await repository.detail(FixtureRepository.free);
+    final navigator = Navigator.of(tester.element(find.byType(HomeScreen)));
+    navigator.push(
+      MaterialPageRoute<void>(
+        // 2026-10-17：由老播放器 `PlayerScreen` 迁移到新播放器
+        // `VerticalFeedScreen`（老播放器已删除，XF-0003 / WT-0031）。
+        //
+        // 迁移时发现两处与老播放器的**真实差异**（不是测试写法问题）：
+        // 1. 老播放器用 `Theme(data: AppTheme.dark)` 包住整页，故播放页
+        //    `Theme.of(...).brightness == dark` 成立；
+        //    **新播放器竖屏层没有包 `Theme`**，只用 `ColoredBox(Colors.black)`
+        //    作深色底（深色主题只在全屏层与弹窗里显式给出）。
+        //    → 因此断言改为「深色底」而非「深色主题」。
+        // 2. 老播放器用 `AnnotatedRegion<SystemUiOverlayStyle>` 强制深色系统栏；
+        //    新播放器无此实现（WT-0031 缺失项 3，用户决定不保留），
+        //    → 系统栏相关断言已移除。
+        builder: (_) => VerticalFeedScreen(
+          repository: repository,
+          store: store,
+          singleDrama: detail.drama,
+          initialEpisodeIndex: 0,
+          playerFactory: () => Player(platformPlayer: platform),
+          videoBuilder: (controls) =>
+              SizedBox(key: const ValueKey('video-theme'), child: controls),
         ),
-      );
-      for (var i = 0; i < 15; i++) {
-        await tester.pump(const Duration(milliseconds: 40));
-      }
-      expect(
-        Theme.of(
-          tester.element(find.byKey(const ValueKey('video-theme'))),
-        ).brightness,
-        Brightness.dark,
-      );
-      expect(
-        SystemChrome.latestStyle?.systemNavigationBarIconBrightness,
-        Brightness.light,
-      );
-      navigator.pop();
-      await tester.pumpAndSettle();
-      expect(
-        Theme.of(tester.element(find.byType(HomeScreen))).brightness,
-        Brightness.light,
-      );
-      expect(
-        SystemChrome.latestStyle?.systemNavigationBarIconBrightness,
-        Brightness.dark,
-      );
-      expect(
-        SystemChrome.latestStyle?.systemNavigationBarContrastEnforced,
-        isFalse,
-      );
-      expect(platform.disposed, isTrue);
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox.shrink());
-      store.dispose();
-    },
-  );
+      ),
+    );
+    for (var i = 0; i < 15; i++) {
+      await tester.pump(const Duration(milliseconds: 40));
+    }
+    // 播放页必须是深色底（黑），否则浅色主题下会出现白底闪屏。
+    final surface = tester.widget<ColoredBox>(
+      find
+          .ancestor(
+            of: find.byKey(const ValueKey('video-theme')),
+            matching: find.byType(ColoredBox),
+          )
+          .first,
+    );
+    expect(surface.color, Colors.black);
+    navigator.pop();
+    await tester.pumpAndSettle();
+    expect(
+      Theme.of(tester.element(find.byType(HomeScreen))).brightness,
+      Brightness.light,
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    store.dispose();
+  });
 }

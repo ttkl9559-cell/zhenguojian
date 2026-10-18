@@ -5,15 +5,12 @@ import 'package:duanju_app/home_screen.dart';
 import 'package:duanju_app/local_store.dart';
 import 'package:duanju_app/models.dart';
 import 'package:duanju_app/playback_loader.dart';
-import 'package:duanju_app/player_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:media_kit/media_kit.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';
-import 'player_fixtures.dart';
 import 'remote_test_helpers.dart';
 
 class DownloadRepository extends FixtureRepository {
@@ -296,87 +293,16 @@ void main() {
     },
   );
 
-  for (final localOnly in [true, false]) {
-    testWidgets(
-      'local failure requires manual online choice, retains progress; localOnly=$localOnly',
-      (tester) async {
-        size(tester, const Size(800, 720));
-        final repository = DownloadRepository();
-        final player = ScriptedPlayer();
-        final detail = await repository.detail(FixtureRepository.free);
-        await tester.pumpWidget(
-          MaterialApp(
-            theme: ThemeData.dark(),
-            home: PlayerScreen(
-              detail: detail,
-              initialIndex: 0,
-              initialPosition: 7,
-              localOnly: localOnly,
-              repository: repository,
-              store: await makeStore(),
-              playerFactory: () => Player(platformPlayer: player),
-              videoBuilder: (controls) => controls,
-            ),
-          ),
-        );
-        await tick(tester);
-        expect(player.opened.single.uri, contains('local.mp4'));
-        await player.seek(const Duration(seconds: 28));
-        await tester.pump();
-        player.fail();
-        await tester.pump();
-        await tester.pump(const Duration(seconds: 1));
-        await tick(tester);
-        expect(find.text('重试本地播放'), findsOneWidget);
-        await tester.pump(const Duration(seconds: 25));
-        expect(repository.onlineCalls, 0);
-        expect(repository.alternateCalls, 0);
-        expect(repository.localCalls, 1);
-        await tester.ensureVisible(find.text('改为在线播放'));
-        await tester.tap(find.text('改为在线播放'));
-        await tick(tester);
-        expect(repository.onlineCalls, 1);
-        expect(player.opened.last.uri, contains('online.mp4'));
-        expect(player.opened.last.start, const Duration(seconds: 28));
-        await tester.tap(find.byTooltip('下一集').last);
-        await tick(tester);
-        expect(player.opened.last.uri, contains('local.mp4'));
-        expect(repository.onlineCalls, 1);
-        await tester.pumpWidget(const SizedBox.shrink());
-        await tick(tester);
-        expect(player.disposed, isTrue);
-        expect(tester.takeException(), isNull);
-      },
-    );
-  }
-
-  testWidgets(
-    'missing local media exposes online choice without contacting the source',
-    (tester) async {
-      final repository = DownloadRepository()..missing = true;
-      final player = ScriptedPlayer();
-      final detail = await repository.detail(FixtureRepository.free);
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: ThemeData.dark(),
-          home: PlayerScreen(
-            detail: detail,
-            initialIndex: 0,
-            repository: repository,
-            store: await makeStore(),
-            playerFactory: () => Player(platformPlayer: player),
-            videoBuilder: (controls) => controls,
-          ),
-        ),
-      );
-      await tick(tester);
-      expect(find.text('改为在线播放'), findsOneWidget);
-      expect(player.opened, isEmpty);
-      expect(repository.onlineCalls, 0);
-      await tester.pumpWidget(const SizedBox.shrink());
-      await tick(tester);
-    },
-  );
+  // 2026-10-17：原有两个用例（"local failure requires manual online choice"
+  // 与 "missing local media exposes online choice"）随老播放器 `player_screen.dart`
+  // 一并删除（XF-0003 / WT-0031）。
+  //
+  // 删除原因：它们断言的是老播放器独有的「改为在线播放」按钮
+  // （`allowOnlineFallback`），新播放器 `vertical_feed_screen.dart` 没有该能力，
+  // 无法迁移。该能力当前生产路径不可达（调用方均传 `localOnly: true`），
+  // 是否补回见 `05-决策与问题.md` 的 `WT-0031` 缺失项 2。
+  //
+  // 备份：`90-归档/GD-0016-老播放器删除前备份/player_screen_test.dart` 等 4 个文件。
 
   testWidgets(
     'TV download navigation and long queue remain usable with only the remote',

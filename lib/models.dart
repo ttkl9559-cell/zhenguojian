@@ -16,7 +16,7 @@ class SourceSite {
   };
   String get groupName => groupId == 'huangguo' ? '黄果' : name;
   String get entryName => switch (id) {
-    'huangguo-video' => '视频',
+    'huangguo-video' => '剧场',
     'huangguoai' => 'AI',
     'cloudfront' => '旧版',
     _ => name,
@@ -27,7 +27,7 @@ class SourceSite {
     hongguo,
     SourceSite('huangdou', '黄豆', '精选短剧'),
     SourceSite('huangju', '黄剧', '热门 · 最新 · 分类短剧'),
-    SourceSite('huangguo-video', '黄果视频', '视频剧集'),
+    SourceSite('huangguo-video', '黄果剧场', '视频剧集'),
     SourceSite('huangguoai', '黄果 AI', 'AI 短剧'),
     SourceSite('cloudfront', '黄果旧版', '旧 API 剧库'),
   ];

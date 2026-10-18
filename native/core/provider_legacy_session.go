@@ -184,6 +184,13 @@ func (d *Downloader) bootstrapLegacySession(ctx context.Context, state legacySes
 			payload, err := d.legacyRequest(ctx, http.MethodPost, "/api/app/mine/login/h5", map[string]any{
 				"devID": access.DeviceID, "sysType": "ios", "isAppStore": false,
 			}, access)
+			if err != nil && isLegacyLoginThrottle(err) {
+				// 代理/VPN 出口 IP 常被服务端记成"登录太频繁"，改直连重试一次。
+				payload, err = d.legacyRequest(context.WithValue(ctx, forceDirectKey{}, true),
+					http.MethodPost, "/api/app/mine/login/h5", map[string]any{
+						"devID": access.DeviceID, "sysType": "ios", "isAppStore": false,
+					}, access)
+			}
 			if err != nil {
 				return access, state, fmt.Errorf("黄果访客登录失败: %w", err)
 			}
@@ -206,6 +213,16 @@ func (d *Downloader) bootstrapLegacySession(ctx context.Context, state legacySes
 
 func validLegacyProtocol(protocol legacyProtocol) bool {
 	return len(protocol.InterfaceKey) > 0 && len(protocol.InterfaceKey) <= 512 && len(protocol.ParamKey) == 16 && len(protocol.ParamIV) == 16
+}
+
+// isLegacyLoginThrottle 判断是否为"访客登录被限流"（黄果 API 4007）。
+// 这类错误与网络无关，通常是代理出口 IP 被服务端风控，直连一般可恢复。
+func isLegacyLoginThrottle(err error) bool {
+	var apiErr *legacyAPIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return apiErr.code == "4007" || strings.Contains(strings.ToLower(apiErr.message), "too frequently")
 }
 
 func parseLegacyProtocol(script string) (legacyProtocol, error) {

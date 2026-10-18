@@ -66,8 +66,17 @@ type proxyRouter struct {
 	systemOverride bool
 }
 
+// forceDirectKey 标记"本次请求即使配置了代理也强制直连"。
+//
+// 用途：系统代理/VPN 节点连不上国内站源时（常见于 Clash 规则错误、
+// 代理出口 IP 被站点限流），自动改用直连重试一次，避免"一开代理源全不可用"。
+type forceDirectKey struct{}
+
 func (router *proxyRouter) proxy(request *http.Request) (*url.URL, error) {
 	if request.URL.Hostname() == "127.0.0.1" || request.URL.Hostname() == "localhost" || request.URL.Hostname() == "::1" {
+		return nil, nil
+	}
+	if request.Context().Value(forceDirectKey{}) != nil {
 		return nil, nil
 	}
 	router.mu.RLock()

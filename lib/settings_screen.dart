@@ -231,6 +231,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
                 SwitchListTile(
+                  value: widget.store.autoUpdateCatalog,
+                  title: const Text('后台自动更新剧库'),
+                  subtitle: const Text(
+                    '开启后每 2 小时在后台检查一次新剧（连续没有新剧会延长到 6 小时）；'
+                    '关闭后不再自动更新，只在「站源管理」里手动更新。',
+                  ),
+                  onChanged: _busy
+                      ? null
+                      : (value) => saveUserChange(
+                          context,
+                          () => widget.store.setAutoUpdateCatalog(value),
+                        ),
+                ),
+                SwitchListTile(
+                  key: const ValueKey('setting-auto-play-mobile'),
+                  value: widget.store.autoPlayOnMobile,
+                  title: const Text('移动网络下自动播放'),
+                  subtitle: const Text(
+                    '关闭后，用流量刷剧时不会自动播放，需点一下画面才开始（Wi-Fi 不受影响）；'
+                    '开启后与 Wi-Fi 一样，刷到就播。',
+                  ),
+                  onChanged: _busy
+                      ? null
+                      : (value) => saveUserChange(
+                          context,
+                          () => widget.store.setAutoPlayOnMobile(value),
+                        ),
+                ),
+                SwitchListTile(
                   value: widget.store.autoExport,
                   title: const Text('下载完成后自动导出 Emby'),
                   subtitle: const Text(
