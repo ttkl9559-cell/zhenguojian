@@ -1,14 +1,11 @@
 name: 构建 Android APK
 
 # 手动触发：仓库 → Actions → 本工作流 → Run workflow
-# 如需推送即构建，把下面的 push 段取消注释即可（会消耗 Actions 额度）
+# 一次运行会同时构建「红果鉴」（仅红果）与「真果鉴」（全站源）两个变体，
+# 各自产出独立的 artifact，互不覆盖。
 on:
   workflow_dispatch:
     inputs:
-      all_sources:
-        description: 构建全站源版「真果鉴」（取消勾选则为仅红果的「红果鉴」）
-        type: boolean
-        default: true
       abi:
         description: CPU 架构（普通手机选 arm64-v8a）
         type: choice
@@ -26,7 +23,14 @@ on:
 
 jobs:
   build:
+    name: 构建 ${{ matrix.all_sources == true && '真果鉴（全站源）' || '红果鉴（仅红果）' }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # false = 红果鉴（hongguojian），true = 真果鉴（zhenguojian）
+        # 两个变体并行执行，任一失败不影响另一个
+        all_sources: [false, true]
     steps:
       - name: 检出源码
         uses: actions/checkout@v4
@@ -69,7 +73,9 @@ jobs:
         with:
           flutter-version: '3.47.4'
           channel: stable
+          cache: true
         # 若该版本拉取失败，删掉 flutter-version 一行，改用最新 stable
+        # cache 会缓存 Flutter SDK 与 pub 依赖，第二次之后能省几分钟
 
       - name: 配置发布签名
         env:
@@ -80,13 +86,32 @@ jobs:
         run: python scripts/configure_signing.py
         # 四个 Secrets 未配置时脚本会跳过，产出 debug 签名的预览包
 
+      - name: 确定产物名称
+        id: naming
+        run: |
+          # 与 build_android.py 的 BuildVariant.slug 保持一致：
+          # matrix.all_sources = true 为真果鉴(zhenguojian)，false 为红果鉴(hongguojian)
+          if [ "${{ matrix.all_sources }}" = "true" ]; then
+            variant=zhenguojian
+            label=真果鉴
+          else
+            variant=hongguojian
+            label=红果鉴
+          fi
+          version=$(grep -m1 '^version:' pubspec.yaml | sed 's/^version:[[:space:]]*//' | tr -d '\r')
+          abi="${{ inputs.abi || 'arm64-v8a' }}"
+          echo "variant=$variant" >> $GITHUB_OUTPUT
+          echo "version=$version" >> $GITHUB_OUTPUT
+          echo "本次构建：${label}  ${version}  ${abi}"
+          echo "产物名：${variant}-${version}-${abi}.zip"
+
       - name: 构建 APK
         env:
           GOPROXY: https://goproxy.cn,direct
           GOSUMDB: 'off'
         run: |
           args="--abi ${{ inputs.abi || 'arm64-v8a' }}"
-          if [ "${{ inputs.all_sources }}" = "true" ]; then args="$args --all-sources"; fi
+          if [ "${{ matrix.all_sources }}" = "true" ]; then args="$args --all-sources"; fi
           if [ "${{ inputs.cn_mirrors }}" = "true" ]; then args="$args --cn-mirrors"; fi
           echo "构建参数:$args"
           python scripts/build_android.py $args
@@ -94,9 +119,11 @@ jobs:
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: zhenguojian-android-${{ inputs.abi || 'arm64-v8a' }}
+          name: ${{ steps.naming.outputs.variant }}-${{ steps.naming.outputs.version }}-${{ inputs.abi || 'arm64-v8a' }}
           path: |
             dist/android/*.apk
             dist/android/SHA256SUMS.txt
           retention-days: 30
         # 只上传构件，需登录 GitHub 才能下载；不自动创建公开 Release
+        # 产物名带变体前缀与版本号：红果鉴为 hongguojian-<版本>-<abi>.zip，
+        # 真果鉴为 zhenguojian-<版本>-<abi>.zip，与包内 APK 文件名一致
