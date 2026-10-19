@@ -61,7 +61,8 @@ class PlaybackPreloader extends ChangeNotifier {
       return;
     }
     final ticket = _generation;
-    _delay = Timer(const Duration(milliseconds: 600), () async {
+    // 0.7.13：去掉 600ms 延迟（用户反馈"下一集还要等"），提前发起预载。
+    _delay = Timer(Duration.zero, () async {
       _delay = null;
       loading = true;
       notifyListeners();
@@ -77,7 +78,8 @@ class PlaybackPreloader extends ChangeNotifier {
           return;
         }
         if (plan == null || plan.url.isEmpty) throw AppFailure('未取得预加载结果');
-        var expires = _now().add(const Duration(minutes: 2));
+        // 0.7.13：有效期 2 分钟 → 5 分钟，避免"停一会儿再切"时预载已过期。
+        var expires = _now().add(const Duration(minutes: 5));
         if (plan.expiresAt > 0) {
           final authorizationExpiry = DateTime.fromMillisecondsSinceEpoch(
             plan.expiresAt,
