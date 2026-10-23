@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'app_build.dart';
 import 'app_layout.dart';
 import 'markdown_lite.dart';
 
@@ -434,6 +435,11 @@ class AppUpdater {
   }
 
   /// 从 `expanded_assets` 页面解析 arm64-v8a 的 APK 文件名。
+  ///
+  /// 0.7.18：**必须只认当前变体的包名**。红果鉴（hongguojian）与真果鉴
+  /// （zhenguojian）是同一 applicationId 的两个构建，装错包会直接覆盖成
+  /// 另一个变体（表现为「红果鉴升级完变成真果鉴」）。原先这里把前缀写死成
+  /// `zhenguojian-`，红果鉴一更就拿到真果鉴的包。
   static Future<String?> _resolveAssetName(String tag, String? proxy) async {
     final client = HttpClient();
     _applyProxy(client, proxy);
@@ -448,9 +454,9 @@ class AppUpdater {
       );
       if (response.statusCode != 200) return null;
       final body = await response.transform(utf8.decoder).join();
-      // 页面里含形如 zhenguojian-0.5.0+46-arm64-v8a.apk 的文件名。
+      // 页面里含形如 hongguojian-0.7.18+78-arm64-v8a.apk 的文件名。
       final match = RegExp(
-        r'zhenguojian-[0-9][0-9.+]*-arm64-v8a\.apk',
+        '${RegExp.escape(appSlug)}-[0-9][0-9.+]*-arm64-v8a\\.apk',
       ).firstMatch(body);
       return match?.group(0);
     } catch (_) {
@@ -515,6 +521,12 @@ class AppUpdater {
       if (version == null) return null;
 
       // 从附件中挑选 arm64-v8a 的 APK（本项目只发这一种架构）。
+      //
+      // 0.7.18：还要匹配**当前变体**（appSlug）。Release 里同时挂着
+      // hongguojian / zhenguojian 两个包，原先只按「第一个含 arm64 的 apk」
+      // 取，真果鉴会拿到红果鉴的包，反之亦然——两者的 applicationId 相同，
+      // 装上就把当前变体覆盖成另一个。
+      final prefix = '$appSlug-';
       String? apkName;
       String? apkUrl;
       final assets = json['assets'];
@@ -524,6 +536,7 @@ class AppUpdater {
           final name = asset['name']?.toString() ?? '';
           if (!name.toLowerCase().endsWith('.apk')) continue;
           if (!name.contains('arm64')) continue;
+          if (!name.startsWith(prefix)) continue;
           apkName = name;
           apkUrl = asset['browser_download_url']?.toString();
           break;
@@ -730,7 +743,7 @@ class AppUpdater {
       directory = Directory.systemTemp;
     }
     final target = File(
-      '${directory.path}/zhenguojian-update-${release.apkName}',
+      '${directory.path}/$appSlug-update-${release.apkName}',
     );
 
     // 下载同样需要走系统代理：否则 VPN 下会出现"能检测到更新、却下载不动"。

@@ -2,7 +2,7 @@
 
 多站源短剧浏览与在线播放应用，Android 手机版。基于开源项目 [Topkill/guoapp3](https://github.com/Topkill/guoapp3) 二次开发与改版。
 
-当前版本：**0.7.17+77** ｜ 平台：Android 8.0+（arm64-v8a） ｜ [下载最新版](https://github.com/ttkl9559-cell/zhenguojian/releases/latest)
+当前版本：**0.7.18+78** ｜ 平台：Android 8.0+（arm64-v8a） ｜ [下载最新版](https://github.com/ttkl9559-cell/zhenguojian/releases/latest)
 
 ---
 
@@ -14,7 +14,14 @@
 - **数据存储**：剧库、追剧、观看历史、下载记录都保存在本机。
 - **账号**：没有云端账号，不需要登录；只有本机用户与权限管理。
 
-## 二、本次更新（0.7.17）
+## 二、本次更新（0.7.18）
+
+- **修复：红果鉴升级后变成真果鉴**
+  - 原因：Release 里同时挂着 `hongguojian-*.apk`（红果鉴）和 `zhenguojian-*.apk`（真果鉴），两者 `applicationId` 相同（同一个应用的两个构建），装上就互相覆盖。而更新器的选包逻辑**把包名写死成 `zhenguojian-`**，另有一条兜底路径只看「第一个含 arm64 的 apk」——红果鉴一更新就拿到真果鉴的包，反过来真果鉴也可能拿到红果鉴的包。
+  - 现在：选包严格按当前构建变体（`appSlug`）匹配，两条路径都只认自己那一个包；匹配不到就当作「没有可用更新」，宁可不更新也不装错包。
+  - **已经被覆盖成真果鉴的同学**：直接装本版 `hongguojian-0.7.18+78-arm64-v8a.apk` 即可换回红果鉴（同包名覆盖安装，本地数据保留）。
+
+上一版 0.7.17：修复红果搜索、站源更新报 connection reset by peer。
 
 - **修复：红果源搜索、站源更新报「connection reset by peer」**
   - 原因：`hongguoduanju.com` 的 A 记录里混着一批握手即复位的坏节点（`1.194.209.x`、`123.53.183.x` 等），系统 DNS 只返回其中一个。被分到坏节点时，搜索、联想、站源更新全部失败，但播放走 App 接口不受影响——所以表现为「能播不能搜」。
