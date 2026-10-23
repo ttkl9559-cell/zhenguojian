@@ -4,7 +4,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:media_kit/media_kit.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -203,7 +202,6 @@ class DuanjuApp extends StatelessWidget {
     this.television = false,
     this.version = appVersion,
     this.navigatorKey,
-    this.feedPlayerFactory,
     this.feedReady,
   });
   final AppRepository repository;
@@ -213,9 +211,6 @@ class DuanjuApp extends StatelessWidget {
   final bool television;
   final String version;
   final GlobalKey<NavigatorState>? navigatorKey;
-
-  /// 测试用：注入首页假播放器。
-  final Player Function()? feedPlayerFactory;
 
   /// 首页是否已就绪（控制开屏页）。为空时不开开屏页（如测试）。
   final ValueNotifier<bool>? feedReady;
@@ -278,7 +273,6 @@ class DuanjuApp extends StatelessWidget {
                     ),
                     repository: repository,
                     store: store!,
-                    feedPlayerFactory: feedPlayerFactory,
                     onFeedReady: feedReady == null
                         ? null
                         : () => feedReady!.value = true,

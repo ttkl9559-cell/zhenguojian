@@ -318,12 +318,12 @@ void main() {
           child: HomeScreen(
             repository: repository,
             store: await makeStore(),
-            initialTab: 1,
+            initialTab: 0,
           ),
         ),
       );
       await tester.pumpAndSettle();
-      focusRemote(tester, find.byKey(const ValueKey('tv-nav-4')));
+      focusRemote(tester, find.byKey(const ValueKey('tv-nav-3')));
       await tester.pumpAndSettle();
       await tester.sendKeyEvent(LogicalKeyboardKey.select);
       await tester.pumpAndSettle();

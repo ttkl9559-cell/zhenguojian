@@ -158,15 +158,15 @@ void main() {
       );
       await tester.pumpAndSettle();
       Size? catalogSize;
-      for (var tab = 1; tab < 4; tab++) {
-        if (tab > 1) {
+      for (var tab = 0; tab < 3; tab++) {
+        if (tab > 0) {
           final destination = layout.$3
               ? find.byKey(ValueKey('tv-nav-$tab'))
               : layout.$1.width < 840
               ? find.byKey(ValueKey('bottom-nav-$tab'))
               : find.descendant(
                   of: find.byType(NavigationRail),
-                  matching: find.text(tab == 2 ? '追剧' : '最近观看'),
+                  matching: find.text(tab == 1 ? '追剧' : '最近观看'),
                 );
           await tester.tap(destination);
           await tester.pumpAndSettle();

@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:media_kit/media_kit.dart';
 
 import 'app_layout.dart';
 import 'app_updater.dart';
@@ -15,7 +14,6 @@ import 'catalog_auto_updater.dart';
 import 'catalog_sort.dart';
 import 'catalog_sort_sheet.dart';
 import 'recommendations_screen.dart';
-import 'vertical_feed_screen.dart';
 import 'rankings_screen.dart';
 import 'detail_screen.dart';
 import 'downloads_screen.dart';
@@ -41,19 +39,15 @@ class HomeScreen extends StatefulWidget {
     required this.repository,
     required this.store,
     this.initialTab,
-    this.feedPlayerFactory,
     this.onFeedReady,
   });
   final AppRepository repository;
   final LocalStore store;
 
-  /// 初始标签下标。为空时默认打开「首页」（竖滑视频流）。
+  /// 初始标签下标。为空时默认打开「发现」。
   final int? initialTab;
 
-  /// 测试用：注入首页假播放器。
-  final Player Function()? feedPlayerFactory;
-
-  /// 首页竖滑流拿到第一批可播放视频后回调（用于关闭开屏页）。
+  /// 首页首帧就绪后回调（用于关闭开屏页）。
   final VoidCallback? onFeedReady;
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -93,89 +87,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _updateNotice = false;
   bool _selectionMode = false;
   bool _showRecommendations = false;
-
-  /// 双击「首页」标签时自增，通知竖滑流重新随机。
-  final _feedRefresh = ValueNotifier<int>(0);
-
-  /// 首页剧类筛选（0.7.2，`XQ-0106`）：all / real / comic。
-  ///
-  /// 用户明确限定：**只有单独选中红果时可用**；
-  /// 其它源或多源（即使包含红果）都不支持——因为这些站源没有这套分类。
-  String _feedGenre = 'all';
-
-  /// 剧类选项（值, 标题, 说明）。
-  static const _feedGenreOptions = <(String, String, String)>[
-    ('all', '全部', '真人剧 + 漫剧 + AI 剧 混合随机'),
-    ('real', '真人剧', '只刷红果真人剧'),
-    ('comic', '漫剧', '漫剧 + AI 剧'),
-  ];
-
-  /// 当前是否允许使用剧类筛选：**恰好只有一个红果源**。
-  bool get _feedGenreEnabled {
-    final sources = _group.sources;
-    return sources.length == 1 && sources.first.id == 'hongguo';
-  }
-
-  String get _feedGenreLabel => switch (_feedGenre) {
-    'real' => '真人剧',
-    'comic' => '漫剧',
-    _ => '全部',
-  };
-
-  /// 传给竖滑流的红果分类；null = 默认三类混合。
-  List<String>? get _feedHongguoGenres {
-    if (!_feedGenreEnabled) return null;
-    return switch (_feedGenre) {
-      'real' => const ['short_play'],
-      'comic' => const ['comic_series', 'ai_series'],
-      _ => null,
-    };
-  }
-
-  /// 打开剧类筛选弹窗（0.7.2，`XQ-0106`）。
-  Future<void> _openFeedGenreSheet() async {
-    if (!widget.store.sources.any((site) => site.id == 'hongguo')) {
-      return;
-    }
-    if (!_feedGenreEnabled) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('剧类筛选只在「仅红果」时可用')),
-      );
-      return;
-    }
-    final picked = await showModalBottomSheet<String>(
-      context: context,
-      builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: Text(
-                '剧类（仅红果）',
-                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
-              ),
-            ),
-            for (final option in _feedGenreOptions)
-              ListTile(
-                key: ValueKey('feed-genre-${option.$1}'),
-                leading: Icon(
-                  option.$1 == _feedGenre
-                      ? Icons.radio_button_checked_rounded
-                      : Icons.radio_button_off_rounded,
-                ),
-                title: Text(option.$2),
-                subtitle: Text(option.$3),
-                onTap: () => Navigator.of(sheetContext).pop(option.$1),
-              ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
-    if (picked == null || !mounted || picked == _feedGenre) return;
-    setState(() => _feedGenre = picked);
-  }
 
   List<SourceGroup> get _sourceGroups {
     final groups = SourceGroup.fromSources(widget.store.sources);
@@ -625,8 +536,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _televisionBack() {
     if (_selectionMode) {
       _cancelSelection();
-    } else if (_tab != _feedIndex) {
-      setState(() => _tab = _feedIndex);
+    } else if (_tab != _discoverIndex) {
+      setState(() => _tab = _discoverIndex);
     } else if (_search.text.isNotEmpty) {
       _search.clear();
       _searchChanged('');
@@ -647,8 +558,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // 旧版「全部站源」在单选模型下没有对应状态，但我们已恢复多选，
       // 这里保持多选语义：若历史配置是 allSources，不强制改写，交给用户再次选择。
     }
-    // 进软件优先打开「首页」（竖滑视频流）。
-    _tab = widget.initialTab ?? _feedIndex;
+    // 进软件直接打开「发现」（0.7.19 起移除了自动播放的竖滑首页）。
+    _tab = widget.initialTab ?? _discoverIndex;
     _browser = CatalogBrowser(widget.repository);
     _updater = LibraryUpdater(
       widget.repository,
@@ -668,6 +579,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     } else {
       _loading = false;
     }
+    // 开屏页放行（0.7.19：首页竖滑流已移除，不再等「首片视频可播」）。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onFeedReady?.call();
+    });
   }
 
   @override
@@ -677,7 +592,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _updater.dispose();
     _autoUpdater.removeListener(_autoUpdateChanged);
     _autoUpdater.dispose();
-    _feedRefresh.dispose();
     _cacheRefreshTimer?.cancel();
     widget.repository.catalogUpdates.removeListener(_metadataChanged);
     _generation++;
@@ -881,36 +795,26 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// 用户明确："返回到桌面（应用仍在后台存活）不算退后台，不该触发刷新；
   /// 只有应用被**彻底退出进程后重新冷启动**才算重新启动、才正常刷新"。
   ///
-  /// 原实现在 `resumed && _wentToBackground` 时 `_feedRefresh.value++`，
+  /// 原实现在 `resumed && _wentToBackground` 时自增刷新信号，
   /// 但真机上"从桌面切回应用"会经历 `inactive/paused → resumed`，
   /// 于是每次从桌面回来都会误刷新一次首页。
   ///
   /// 现在**彻底移除生命周期驱动的刷新**：
   /// - 从桌面切回（进程存活）→ 不刷新；
   /// - 应用被杀后冷启动 → 走 `main` 初始化，首页自然首次加载（属正常刷新）。
-  /// - 手动刷新入口保留：**双击「首页」标签**（`_onTabDoubleTap`）。
+  /// - 手动刷新入口：发现页顶部的「更新剧库」按钮。
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // 0.2.27：不再根据前后台状态刷新首页。
+    // 0.2.27：不再根据前后台状态刷新。
     // 保留该方法以免影响 `WidgetsBindingObserver` 的注册/注销；
     // 若日后需要"真正退后台才刷新"，可在此处判断 `detached`（进程结束）再处理。
   }
 
-  /// 双击标签：目前只对「首页」生效——重新随机一批视频。
-  void _onTabDoubleTap(int tab) {
-    if (tab != _feedIndex) return;
-    _changeTab(_feedIndex);
-    _feedRefresh.value++;
-  }
-
-  /// 「首页」标签在所有标签中固定排第一位。
-  static const _feedIndex = 0;
-
-  /// 各功能标签在导航中的下标（「首页」占 0，其余依次后移）。
-  int get _discoverIndex => 1;
-  int get _followIndex => 2;
-  int get _historyIndex => 3;
-  int get _downloadIndex => 4;
+  /// 各标签在导航中的下标（0.7.19 起「首页」竖滑流已移除）。
+  static const _discoverIndex = 0;
+  static const _followIndex = 1;
+  static const _historyIndex = 2;
+  static const _downloadIndex = 3;
 
   void _cancelSelection() => setState(() {
     _selectionMode = false;
@@ -1046,7 +950,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   )
-                : _tab == _feedIndex || _tab == _discoverIndex
+                : _tab == _discoverIndex
                 ? _sourceMenu()
                 : const Text(appName),
             actions: [
@@ -1064,19 +968,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   child: const Text('取消'),
                 ),
               ] else ...[
-                // 0.7.2（XQ-0106）：首页剧类筛选入口。仅"单独红果"时可用。
-                if (_tab == _feedIndex)
-                  IconButton(
-                    key: const ValueKey('feed-genre'),
-                    tooltip: _feedGenreEnabled
-                        ? '剧类 · $_feedGenreLabel'
-                        : '剧类筛选仅红果单独选择时可用',
-                    onPressed: _openFeedGenreSheet,
-                    color: _feedGenreEnabled && _feedGenre != 'all'
-                        ? Theme.of(context).colorScheme.primary
-                        : null,
-                    icon: const Icon(Icons.theater_comedy_outlined),
-                  ),
                 if (_tab == _followIndex)
                   IconButton(
                     key: const ValueKey('follow-lan-sync'),
@@ -1262,7 +1153,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           for (final entry in [
-                            (Icons.smart_display_rounded, '首页'),
                             (Icons.explore_rounded, '发现'),
                             (Icons.bookmark_rounded, '追剧'),
                             (Icons.history_rounded, '最近观看'),
@@ -1293,11 +1183,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     groupAlignment: -.8,
                     destinations: [
                       NavigationRailDestination(
-                        icon: Icon(Icons.smart_display_outlined),
-                        selectedIcon: Icon(Icons.smart_display_rounded),
-                        label: Text('首页'),
-                      ),
-                      NavigationRailDestination(
                         icon: Icon(Icons.explore_outlined),
                         selectedIcon: Icon(Icons.explore),
                         label: Text('发现'),
@@ -1322,34 +1207,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   const VerticalDivider(width: 1, thickness: 1),
                 ],
                 Expanded(
-                  // 0.2.26 修正（用户反馈"每次回到首页都会重新刷新"）：
+                  // 0.2.26 修正：切标签时用 `IndexedStack` 保活各页面，
+                  // 避免未选中的页面被销毁重建（丢失滚动位置与加载状态）。
                   //
-                  // 原先这里用 `_tab == _feedIndex ? A : _tab == B ? ...` 的三元表达式
-                  // 直接构建，切换标签时**未选中的页面会被销毁**，切回来时重建，
-                  // 于是首页（竖滑流）每次都重新加载、丢失播放进度与滚动位置。
-                  //
-                  // 改用 `IndexedStack`：所有页面同时存在于树中，只显示当前一个。
-                  // 这样首页（含播放器）在切标签时保持存活，不再重建。
-                  //
-                  // 刷新时机改为（用户明确要求）：
-                  // - 手动双击「首页」标签（_onTabDoubleTap → _feedRefresh++）；
-                  // - 退到后台再回来（前后台切换时首页会因内存回收自然重载，
-                  //   同时 _feedRefresh 由生命周期兜底触发）。
+                  // 0.7.19：首页自动播放的竖滑流已按用户要求移除，
+                  // 默认落在「发现」，刷新入口改为发现页顶部的「更新剧库」。
                   child: IndexedStack(
                     index: _tab,
                     children: [
-                      // 首页：竖滑流。
-                      VerticalFeedScreen(
-                        repository: widget.repository,
-                        store: widget.store,
-                        embedded: true,
-                        sources: _group.sources,
-                        hongguoGenres: _feedHongguoGenres,
-                        playerFactory: widget.feedPlayerFactory,
-                        refreshSignal: _feedRefresh,
-                        onReady: widget.onFeedReady,
-                        active: _tab == _feedIndex,
-                      ),
                       // 发现页。
                       widget.store.sources.isEmpty
                           ? const StatusPanel(
@@ -1405,13 +1270,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               : AppBottomNavigation(
                   selectedIndex: _tab,
                   onDestinationSelected: _changeTab,
-                  onDestinationDoubleTap: _onTabDoubleTap,
                   destinations: [
-                    NavigationDestination(
-                      icon: Icon(Icons.smart_display_outlined),
-                      selectedIcon: Icon(Icons.smart_display_rounded),
-                      label: '首页',
-                    ),
                     NavigationDestination(
                       icon: Icon(Icons.explore_outlined),
                       selectedIcon: Icon(Icons.explore),
@@ -1439,9 +1298,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return PopScope(
           canPop:
               !_selectionMode &&
-              (!television ||
-                  _tab == _feedIndex ||
-                  _tab == _discoverIndex && _search.text.isEmpty),
+              (!television || _tab == _discoverIndex && _search.text.isEmpty),
           onPopInvokedWithResult: (didPop, result) {
             if (!didPop) _televisionBack();
           },

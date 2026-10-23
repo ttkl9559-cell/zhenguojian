@@ -193,7 +193,7 @@ void main() {
       final repository = LibraryFeatureRepository();
       await tester.pumpWidget(
         MaterialApp(
-          home: HomeScreen(repository: repository, store: store, initialTab: 1),
+          home: HomeScreen(repository: repository, store: store, initialTab: 0),
         ),
       );
       await tester.pumpAndSettle();
