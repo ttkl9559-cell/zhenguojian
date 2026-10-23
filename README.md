@@ -2,7 +2,7 @@
 
 多站源短剧浏览与在线播放应用，Android 手机版。基于开源项目 [Topkill/guoapp3](https://github.com/Topkill/guoapp3) 二次开发与改版。
 
-当前版本：**0.7.16+76** ｜ 平台：Android 8.0+（arm64-v8a） ｜ [下载最新版](https://github.com/ttkl9559-cell/zhenguojian/releases/latest)
+当前版本：**0.7.17+77** ｜ 平台：Android 8.0+（arm64-v8a） ｜ [下载最新版](https://github.com/ttkl9559-cell/zhenguojian/releases/latest)
 
 ---
 
@@ -14,17 +14,13 @@
 - **数据存储**：剧库、追剧、观看历史、下载记录都保存在本机。
 - **账号**：没有云端账号，不需要登录；只有本机用户与权限管理。
 
-## 二、本次更新（0.7.16）
+## 二、本次更新（0.7.17）
 
-- **修复：红果源打开即提示「取流失败」，无法播放**
-  - 原因：红果 App 接口换成 `video_model/v1/` 后，签名校验收严。旧实现只发简化版 `X-Gorgon`，并把 `X-Argus` 写死成常量，服务端对这种请求返回 **HTTP 200 + 空响应体**，客户端看到的就是「App 接口未返回有效数据」；网页兜底也因为播放页改成受保护播放，不再下发地址。
-  - 现在：补齐官方客户端整套设备签名（`X-Gorgon` / `X-Argus` / `X-Helios` / `X-Ladon` / `X-Medusa` / `X-SS-STUB`），设备身份每次请求重新生成，请求参数与官方 App 对齐。
-  - 实测：可正常取到全部清晰度（360p / 480p / 540p / 720p / 1080p），最高 1080p HEVC。
+- **修复：红果源搜索、站源更新报「connection reset by peer」**
+  - 原因：`hongguoduanju.com` 的 A 记录里混着一批握手即复位的坏节点（`1.194.209.x`、`123.53.183.x` 等），系统 DNS 只返回其中一个。被分到坏节点时，搜索、联想、站源更新全部失败，但播放走 App 接口不受影响——所以表现为「能播不能搜」。
+  - 现在：把这个域名纳入 CDN 兜底名单，直连失败时改用 DoH 查备用地址，逐个试连可用节点并记住。实测强制指向坏节点也能在 0.4 秒内自愈。
 
-- **变更：应用内更新改为本仓库发布**
-  - 「检查更新」改为查询 `ttkl9559-cell/zhenguojian` 的 Release。
-
-上一版 0.7.15：连播本剧切集不再闪上一集最后一帧。更早版本见 [Releases](https://github.com/ttkl9559-cell/zhenguojian/releases)。
+上一版 0.7.16：修复红果取流（补齐 App 接口完整签名，播放恢复到 1080p），应用内更新地址改到本仓库。更早版本见 [Releases](https://github.com/ttkl9559-cell/zhenguojian/releases)。
 
 ## 三、快速开始
 
