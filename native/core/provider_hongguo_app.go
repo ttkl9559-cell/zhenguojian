@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -130,13 +129,7 @@ func (downloader *Downloader) hongguoAppRequest(ctx context.Context, method, pat
 	client.mu.Lock()
 	base, deviceID, installID := client.baseURL, client.state.DeviceID, client.state.InstallID
 	client.mu.Unlock()
-	query := url.Values{
-		"aid": {"8662"}, "app_name": {"novelread"}, "version_code": {"73532"}, "version_name": {"7.3.5.32"},
-		"manifest_version_code": {"73532"}, "update_version_code": {"73532"}, "channel": {"update_64"},
-		"device_platform": {"android"}, "os": {"android"}, "ssmix": {"a"}, "device_type": {"25053RT47C"},
-		"device_brand": {"Redmi"}, "language": {"zh"}, "os_api": {"36"}, "os_version": {"16"},
-		"resolution": {"1280*2772"}, "dpi": {"520"}, "ac": {"wifi"}, "device_id": {deviceID}, "iid": {installID},
-	}
+	query := hongguoAppDeviceQuery(deviceID, installID)
 	for key, values := range extra {
 		query[key] = append([]string(nil), values...)
 	}
@@ -169,16 +162,15 @@ func (downloader *Downloader) hongguoAppRequest(ctx context.Context, method, pat
 			return nil, err
 		}
 		request.Header.Set("User-Agent", hongguoAppUserAgent)
-		request.Header.Set("Accept", "application/json")
-		request.Header.Set("X-XS-From-Web", "0")
-		request.Header.Set("Sdk-Version", "2")
+		request.Header.Set("Accept", "application/json; charset=utf-8,application/x-protobuf")
+		request.Header.Set("x-xs-from-web", "0")
+		request.Header.Set("sdk-version", "2")
 		if payload != nil {
-			request.Header.Set("Content-Type", "application/json; charset=utf-8")
+			request.Header.Set("Content-Type", "application/json; charset=UTF-8")
 		}
 		response, err := downloader.doPreparedCatalogRequest(request, 20*time.Second, func(prepared *http.Request) {
 			now := time.Now()
-			query.Set("_rticket", strconv.FormatInt(now.UnixMilli(), 10))
-			prepared.URL.RawQuery = query.Encode()
+			prepared.URL.RawQuery = hongguoStableQuery(query, body, uint32(now.Unix()), now.UnixMilli())
 			signHongguoRequest(prepared, body, now)
 		})
 		if err != nil {

@@ -2,7 +2,7 @@
 
 多站源短剧浏览与在线播放应用，Android 手机版。基于开源项目 [Topkill/guoapp3](https://github.com/Topkill/guoapp3) 二次开发与改版。
 
-当前版本：**0.7.15+75** ｜ 平台：Android 8.0+（arm64-v8a） ｜ [下载最新版](https://github.com/kuoluoss/zhenguojian/releases/latest)
+当前版本：**0.7.16+76** ｜ 平台：Android 8.0+（arm64-v8a） ｜ [下载最新版](https://github.com/ttkl9559-cell/zhenguojian/releases/latest)
 
 ---
 
@@ -14,17 +14,21 @@
 - **数据存储**：剧库、追剧、观看历史、下载记录都保存在本机。
 - **账号**：没有云端账号，不需要登录；只有本机用户与权限管理。
 
-## 二、本次更新（0.7.15）
+## 二、本次更新（0.7.16）
 
-- **修复：连播本剧切集后，会闪一下上一集最后一帧**
-  - 原因：动画一结束就复位画面，但切集要先保存进度再换片源，这段空档播放器还在显示上一集；
-  - 现在：画面先停在屏幕外（纯黑），**等新集真正就绪再复位**，10 秒兜底防止一直黑屏。
+- **修复：红果源打开即提示「取流失败」，无法播放**
+  - 原因：红果 App 接口换成 `video_model/v1/` 后，签名校验收严。旧实现只发简化版 `X-Gorgon`，并把 `X-Argus` 写死成常量，服务端对这种请求返回 **HTTP 200 + 空响应体**，客户端看到的就是「App 接口未返回有效数据」；网页兜底也因为播放页改成受保护播放，不再下发地址。
+  - 现在：补齐官方客户端整套设备签名（`X-Gorgon` / `X-Argus` / `X-Helios` / `X-Ladon` / `X-Medusa` / `X-SS-STUB`），设备身份每次请求重新生成，请求参数与官方 App 对齐。
+  - 实测：可正常取到全部清晰度（360p / 480p / 540p / 720p / 1080p），最高 1080p HEVC。
 
-上一版 0.7.14：连播本剧切集跟手动画。更早版本见 [Releases](https://github.com/kuoluoss/zhenguojian/releases)。
+- **变更：应用内更新改为本仓库发布**
+  - 「检查更新」改为查询 `ttkl9559-cell/zhenguojian` 的 Release。
+
+上一版 0.7.15：连播本剧切集不再闪上一集最后一帧。更早版本见 [Releases](https://github.com/ttkl9559-cell/zhenguojian/releases)。
 
 ## 三、快速开始
 
-1. 从 [Releases](https://github.com/kuoluoss/zhenguojian/releases/latest) 下载 `zhenguojian-<版本>-arm64-v8a.apk`。
+1. 从 [Releases](https://github.com/ttkl9559-cell/zhenguojian/releases/latest) 下载 `zhenguojian-<版本>-arm64-v8a.apk`。
 2. 手机上安装（需允许「安装未知来源应用」）。
 3. 打开即用；之后有新版本时，App 内会提示更新。
 
@@ -156,7 +160,8 @@ python3 scripts/build_android.py --abi arm64-v8a
 ## 十一、致谢与声明
 
 - 原始项目：[Topkill/guoapp3](https://github.com/Topkill/guoapp3)（原作者）
-- 本改版：[kuoluoss/zhenguojian](https://github.com/kuoluoss/zhenguojian)
+- 本改版：[ttkl9559-cell/zhenguojian](https://github.com/ttkl9559-cell/zhenguojian)
+- 上游原版：[kuoluoss/zhenguojian](https://github.com/kuoluoss/zhenguojian)
 - 本应用不提供、不存储、不分发任何视频内容；所有内容来自各站源公开接口，版权归原站点与版权方所有。
 - 仅供个人学习与技术研究使用，请勿用于商业用途。
 
@@ -197,4 +202,4 @@ python3 scripts/build_android.py --abi arm64-v8a
 | 0.6.6 | 2026-10-14 | 随机流按历史进度续播、加速提示改版 |
 | 0.6.5 | 2026-10-14 | 更新日志改走 Atom、已看为终态、随机流排除已看 |
 
-更早版本见 [Releases](https://github.com/kuoluoss/zhenguojian/releases)。
+更早版本见 [Releases](https://github.com/ttkl9559-cell/zhenguojian/releases)。

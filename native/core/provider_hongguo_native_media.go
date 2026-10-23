@@ -17,8 +17,17 @@ func (downloader *Downloader) resolveHongguoAppMedia(ctx context.Context, videoI
 		return providerMedia{}, errors.New("红果视频 ID 无效")
 	}
 	payload := map[string]any{
-		"video_id": videoID, "content_type": 1,
-		"biz_param": map[string]any{"need_all_video_definition": true, "video_platform": 3},
+		"video_id": videoID,
+		"biz_param": map[string]any{
+			"detail_page_version":      0,
+			"device_level":             3,
+			"disable_digg_stat":        false,
+			"need_all_video_definition": true,
+			"need_mp4_align":           false,
+			"use_os_player":            false,
+			"use_server_dns":           false,
+			"video_platform":           1024,
+		},
 	}
 	result, err := downloader.hongguoAppRequest(ctx, http.MethodPost, "/novel/player/video_model/v1/", nil, payload)
 	if err != nil {

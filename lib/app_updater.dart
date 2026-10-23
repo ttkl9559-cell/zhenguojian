@@ -24,7 +24,7 @@ class AppUpdater {
   AppUpdater._();
 
   /// 发布仓库（用户自有仓库，README 已标明原作者 Topkill/guoapp3）。
-  static const _owner = 'kuoluoss';
+  static const _owner = 'ttkl9559-cell';
   static const _repo = 'zhenguojian';
 
   /// GitHub API 直连地址（国内可能不通，失败即静默跳过）。
