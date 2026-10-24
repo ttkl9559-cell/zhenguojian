@@ -2,11 +2,15 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -15,10 +19,13 @@ import (
 )
 
 const (
-	hongguoSearchTimeout      = 40 * time.Second
-	hongguoSearchPageTimeout  = 12 * time.Second
-	hongguoSearchPendingLimit = 32
-	hongguoSearchNameCount    = 50
+	hongguoSearchTimeout       = 40 * time.Second
+	hongguoSearchPageTimeout   = 12 * time.Second
+	hongguoSearchPendingLimit  = 32
+	hongguoSearchNameCount     = 50
+	hongguoSearchAPIQueryRunes = 30
+	hongguoSearchAPIPageLimit  = 3
+	hongguoSearchBodyLimit     = 4 * 1024 * 1024
 )
 
 type hongguoSearchEntry struct {
@@ -291,37 +298,113 @@ func hongguoTitleSearchRank(title, query string) int {
 	}
 }
 
+// 2026-10 起红果的 /search/<关键词> 页面改为前端渲染，不再下发 _ROUTER_DATA，
+// 原「解析搜索页 SSR 数据」的取法只会拿到空壳页面。改为直接请求该页面背后的
+// JSON 接口 /api/search/result（每页固定 10 条，用 page 翻页）。
 func (downloader *Downloader) fetchHongguoSearchPage(ctx context.Context, keyword string) (hongguoSearchEntry, error) {
-	pageURL := hongguoBaseURL + "/search/" + url.PathEscape(keyword)
-	body, err := downloader.fetchProviderText(ctx, pageURL, hongguoBaseURL+"/")
+	query := keyword
+	if runes := []rune(query); len(runes) > hongguoSearchAPIQueryRunes {
+		// 接口限制搜索词最多 30 个字符，超长会直接返回错误。
+		query = string(runes[:hongguoSearchAPIQueryRunes])
+	}
+	first, err := downloader.fetchHongguoSearchAPI(ctx, query, 1)
 	if err != nil {
 		return hongguoSearchEntry{}, err
 	}
-	page := routerLoaderMap(parseRouterData(body), "search_(keyword)/page", "search_")
-	rows, valid := page["searchList"].([]any)
-	if page["isSuccess"] != true || !valid || mapString(page, "query") != keyword {
-		return hongguoSearchEntry{}, errors.New("红果搜索未返回有效结果")
+	entry := hongguoSearchEntry{Dramas: mergeHongguoSearchDramas([]Drama{}, first.Dramas), Total: first.Total}
+	pages := min(first.TotalPages, hongguoSearchAPIPageLimit)
+	if pages > 1 {
+		var group sync.WaitGroup
+		var mu sync.Mutex
+		for page := 2; page <= pages; page++ {
+			group.Add(1)
+			go func(page int) {
+				defer group.Done()
+				result, err := downloader.fetchHongguoSearchAPI(ctx, query, page)
+				if err != nil || len(result.Dramas) == 0 {
+					return
+				}
+				mu.Lock()
+				entry.Dramas = mergeHongguoSearchDramas(entry.Dramas, result.Dramas)
+				mu.Unlock()
+			}(page)
+		}
+		group.Wait()
 	}
-	entry := hongguoSearchEntry{Dramas: make([]Drama, 0, len(rows))}
+	if len(first.Dramas) == 0 && len(entry.Dramas) == 0 && first.Total > 0 {
+		return hongguoSearchEntry{}, errors.New("红果搜索结果中没有可识别的剧集")
+	}
+	if entry.Total < len(entry.Dramas) {
+		entry.Total = len(entry.Dramas)
+	}
+	entry.Limited = entry.Total > len(entry.Dramas)
+	return entry, nil
+}
+
+type hongguoSearchAPIResult struct {
+	Dramas     []Drama
+	Total      int
+	TotalPages int
+}
+
+func (downloader *Downloader) fetchHongguoSearchAPI(ctx context.Context, query string, page int) (hongguoSearchAPIResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, hongguoSearchPageTimeout)
+	defer cancel()
+	values := url.Values{"query": {query}, "page": {strconv.Itoa(page)}}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, hongguoBaseURL+"/api/search/result?"+values.Encode(), nil)
+	if err != nil {
+		return hongguoSearchAPIResult{}, err
+	}
+	request.Header.Set("User-Agent", userAgent)
+	request.Header.Set("Referer", hongguoBaseURL+"/")
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Accept-Language", "zh-CN,zh;q=0.9")
+
+	response, err := downloader.doCatalogRequestWithTimeout(request, hongguoSearchPageTimeout)
+	if err != nil {
+		return hongguoSearchAPIResult{}, err
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, hongguoSearchBodyLimit+1))
+	if err != nil {
+		return hongguoSearchAPIResult{}, err
+	}
+	if len(body) > hongguoSearchBodyLimit {
+		return hongguoSearchAPIResult{}, errors.New("红果搜索响应过大")
+	}
+	if response.StatusCode != http.StatusOK || catalogResponseBlockReason(response, body) != "" {
+		return hongguoSearchAPIResult{}, downloader.catalogResponseError(request, response, body)
+	}
+	var payload map[string]any
+	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil || payload == nil {
+		return hongguoSearchAPIResult{}, errors.New("红果搜索未返回有效数据")
+	}
+	rows, valid := payload["searchList"].([]any)
+	if !valid {
+		return hongguoSearchAPIResult{}, errors.New("红果搜索未返回有效结果")
+	}
+	result := hongguoSearchAPIResult{Dramas: make([]Drama, 0, len(rows)), TotalPages: 1}
+	result.Total, _ = strconv.Atoi(mapString(payload, "totalCount"))
+	if pages, err := strconv.Atoi(mapString(payload, "totalPages")); err == nil && pages > 1 {
+		result.TotalPages = pages
+	}
 	seen := make(map[string]bool, len(rows))
 	for _, row := range rows {
+		// 极少数结果（约每 3 页出现一次）只带名称和 series_id，没有 video_data，
+		// 补不出封面与简介，跳过以免列表出现空封面卡片。
 		if len(nestedMap(row, "video_data")) == 0 {
 			continue
 		}
 		drama := hongguoDramaFromAny(row, "短剧")
 		if drama.ID != "" && !seen[drama.ID] {
 			seen[drama.ID] = true
-			entry.Dramas = append(entry.Dramas, drama)
+			result.Dramas = append(result.Dramas, drama)
 		}
 	}
-	if len(rows) > 0 && len(entry.Dramas) == 0 {
-		return hongguoSearchEntry{}, errors.New("红果搜索结果中没有可识别的剧集")
+	if len(rows) > 0 && len(result.Dramas) == 0 {
+		return hongguoSearchAPIResult{}, errors.New("红果搜索结果中没有可识别的剧集")
 	}
-	entry.Total, _ = strconv.Atoi(mapString(page, "totalCount"))
-
-	entry.Limited = entry.Total > len(entry.Dramas)
-	if entry.Total < len(entry.Dramas) {
-		entry.Total = len(entry.Dramas)
-	}
-	return entry, nil
+	return result, nil
 }
